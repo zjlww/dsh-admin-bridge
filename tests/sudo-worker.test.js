@@ -47,6 +47,7 @@ function fixture(t, options = {}) {
   const spawns = [];
   const worker = new SudoWorker(manifest(), {
     authMs: 500,
+    requirePassword: options.requirePassword,
     ...(Object.hasOwn(options, 'canProceed') ? { canProceed: options.canProceed } : {}),
     spawnProcess(...args) {
       spawns.push(args);
@@ -110,6 +111,32 @@ test('sudo argv and environment never contain the password and execute only the 
   assert.equal(f.child.writes.length, 0, 'do not send the password before the private prompt');
   f.child.frame({ type: 'ready', uid: 0 });
   assert.equal((await authentication).value, f.worker);
+});
+
+test('Sudo mode rejects passwordless ready without accepting an unverified password', async t => {
+  const f = fixture(t, { requirePassword: true });
+  const authentication = f.authenticate();
+  f.child.frame({ type: 'ready', uid: 0 });
+  await rejected(authentication, 'password_required');
+  assert.equal(f.child.writes.length, 0);
+  assertClosed(f);
+});
+
+test('Sudo mode requires a fresh challenge and clears its single password write', async t => {
+  const f = fixture(t, { requirePassword: true });
+  const authentication = f.authenticate();
+  f.child.stderr.emit('data', Buffer.from(f.prompt()));
+  f.child.frame({ type: 'ready', uid: 0 });
+  assert.equal((await authentication).value, f.worker);
+  assert.equal(f.child.writes.length, 1);
+  assert.ok(f.child.writes[0].source.every(byte => byte === 0));
+  assert.equal(f.spawns[0][1].includes('-k'), true);
+});
+
+test('Sudo mode rejects empty passwords before starting sudo', async t => {
+  const f = fixture(t, { requirePassword: true });
+  await rejected(f.authenticate(''), 'invalid_request');
+  assert.equal(f.spawns.length, 0);
 });
 
 test('invalid credentials reject before spawn, including CR/LF/NUL and UTF-8 byte overflow', async t => {

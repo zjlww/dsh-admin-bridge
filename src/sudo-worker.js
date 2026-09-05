@@ -10,8 +10,10 @@ const safeEnvironment = Object.freeze({ PATH: '/usr/sbin:/usr/bin:/sbin:/bin', L
 
 // Each worker owns private pipes. No shell, PTY, timestamp keepalive, or secret in argv/env.
 export class SudoWorker {
-  constructor(manifest, { spawnProcess = spawn, authMs = AUTH_MS, canProceed = () => true } = {}) {
+  constructor(manifest, { spawnProcess = spawn, authMs = AUTH_MS, canProceed = () => true,
+    requirePassword = false } = {}) {
     this.manifest = manifest;
+    this.requirePassword = requirePassword === true;
     this.canProceed = () => { try { return canProceed() === true; } catch { return false; } };
     this.spawnProcess = spawnProcess;
     this.authMs = authMs;
@@ -25,7 +27,8 @@ export class SudoWorker {
   async authenticate(password) {
     if (this.child || this.closed) fail('closed', 'Administrator worker is unavailable.');
     if (!this.canProceed()) fail('policy_denied', 'Administrator authorization is no longer available.');
-    if (typeof password !== 'string' || Buffer.byteLength(password) > 4096 || /[\r\n\0]/.test(password))
+    if (typeof password !== 'string' || (this.requirePassword && password.length === 0) ||
+        Buffer.byteLength(password) > 4096 || /[\r\n\0]/.test(password))
       fail('invalid_request', 'Invalid password input.');
     let secret = Buffer.from(password + '\n', 'utf8');
     password = undefined;
@@ -99,8 +102,13 @@ export class SudoWorker {
             if (!isObject(frame) || frame.type !== 'ready' || frame.uid !== 0 || Object.keys(frame).length !== 2) {
               this.close(); return;
             }
+            // Sudo mode promises fresh password authentication on every entry.
+            // NOPASSWD must not make an arbitrary submitted password look valid.
+            if (this.requirePassword && !sent) {
+              finishAuth(new BridgeError('password_required', 'Sudo access requires password-based sudo authentication; passwordless sudo is not supported.'));
+              this.close(); return;
+            }
             this.ready = true;
-            // A NOPASSWD rule may start the helper without asking for any password.
             finishAuth();
             continue;
           }
