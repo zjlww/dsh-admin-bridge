@@ -147,6 +147,23 @@ class ValidationTests(unittest.TestCase):
         self.assertEqual(len(result.operations), 16)
         self.assertEqual(result.ttl_seconds, 900)
 
+    def test_arbitrary_permission_and_command_validation(self):
+        value = {"version": 1, "ttlSeconds": 30, "operations": [], "allowAllCommands": True}
+        self.assertTrue(runner.parse_manifest(encode(value)).allow_all_commands)
+        self.assertFalse(runner.parse_manifest(encode(manifest())).allow_all_commands)
+        for permission in (False, None, 1, "true"):
+            with self.assertRaises(runner.Invalid):
+                runner.parse_manifest(encode({**value, "allowAllCommands": permission}))
+        base = {"type": "runCommand", "id": "r", "command": "true"}
+        self.assertEqual(runner.validate_command(base), ("true", "/", 120))
+        for patch in ({"command": ""}, {"command": "\u0000"}, {"command": "\ud800"},
+                      {"command": "é" * 8193}, {"workdir": "relative"},
+                      {"workdir": "/does-not-exist-dsh-test"}, {"workdir": "/usr/bin/bash"},
+                      {"workdir": "/" + "é" * 2048}, {"env": {}},
+                      *({"timeoutSeconds": x} for x in (0, 121, True, 1.0, "1", None))):
+            with self.subTest(patch=patch), self.assertRaises(runner.Invalid):
+                runner.validate_command({**base, **patch})
+
     def test_root_path_permissions(self):
         root_dir = os.stat_result((stat.S_IFDIR | 0o755, 0, 0, 0, 0, 0, 0, 0, 0, 0))
         root_file = os.stat_result((stat.S_IFREG | 0o755, 0, 0, 0, 0, 0, 0, 0, 0, 0))
@@ -182,6 +199,52 @@ class ProtocolTests(unittest.TestCase):
         bridge.run(request_id="request_2")
         self.assertEqual(bridge.frame()["id"], "request_2")
 
+    def test_shell_pipeline_cwd_timeout_output_and_legacy_compatibility(self):
+        bridge = self.bridge({**manifest(), "allowAllCommands": True})
+        bridge.send({"type": "runCommand", "id": "shell1", "command": "printf one | tr o O; printf '\\n'; pwd; read x || printf eof", "workdir": "/tmp"})
+        result = bridge.frame()
+        self.assertEqual(result["exitCode"], 0)
+        self.assertEqual(result["stdout"], "One\n/tmp\neof")
+        bridge.run()
+        self.assertEqual(bridge.frame()["stdout"], "hello\n")
+        bridge.send({"type": "runCommand", "id": "shell2", "command": "head -c 100000 /dev/zero"})
+        result = bridge.frame()
+        self.assertTrue(result["truncated"])
+        self.assertEqual(len(result["stdout"]), runner.MAX_OUTPUT_BYTES)
+        bridge.send({"type": "runCommand", "id": "shell3", "command": "sleep 20", "timeoutSeconds": 1})
+        self.assertTrue(bridge.frame()["timedOut"])
+        bridge.send({"type": "runCommand", "id": "shell3", "command": "true"})
+        self.assert_revoked(bridge)
+
+    def test_shell_requires_manifest_permission_and_bad_frames_revoke(self):
+        for permission in (None, False):
+            value = manifest()
+            if permission is not None:
+                value["allowAllCommands"] = permission
+            bridge = self.bridge(value)
+            bridge.send({"type": "runCommand", "id": "r", "command": "true"})
+            self.assert_revoked(bridge)
+        for patch in ({"operationId": "example"}, {"timeoutSeconds": 121},
+                      {"workdir": "relative"}, {"command": "x" * 16385}):
+            bridge = self.bridge({**manifest(), "allowAllCommands": True})
+            bridge.send({"type": "runCommand", "id": "r", "command": "true", **patch})
+            self.assert_revoked(bridge)
+
+    def test_shell_eof_revokes_running_process_group(self):
+        bridge = self.bridge({**manifest(), "allowAllCommands": True})
+        bridge.send({"type": "runCommand", "id": "r", "command": "sleep 20"})
+        children_file = Path(f"/proc/{bridge.process.pid}/task/{bridge.process.pid}/children")
+        deadline = time.monotonic() + 2
+        children = []
+        while not children and time.monotonic() < deadline:
+            children = children_file.read_text().split()
+            select.select([], [], [], 0.01)
+        self.assertTrue(children)
+        bridge.process.stdin.close()
+        self.assertEqual(bridge.process.wait(timeout=3), 0)
+        for child in children:
+            self.assertFalse(Path(f"/proc/{child}").exists())
+
     def test_no_command_stdin_fixed_environment_and_cwd(self):
         code = "import os,json; print(json.dumps([os.getcwd(),os.read(0,1).decode(),dict(os.environ)]))"
         with mock.patch.dict(os.environ, {"DSH_TEST_SECRET": "not-in-child", "PYTHONPATH": "/fake"}):
@@ -209,7 +272,7 @@ class ProtocolTests(unittest.TestCase):
 
     def test_malformed_duplicate_and_oversized_frames(self):
         cases = [b"password-must-not-echo\n", b"\n", b"[1,2]\n", b"\xff\n",
-                 b'{"type":"lock","type":"run"}\n', b"x" * 4097,
+                 b'{"type":"lock","type":"run"}\n', b"x" * (runner.MAX_FRAME_BYTES + 1),
                  b'{"type":"lock"}\x00\n']
         for raw in cases:
             with self.subTest(raw=raw[:50]):

@@ -1,6 +1,25 @@
 # Verification and development side effects
 
-## Initial alpha scope
+## 0.3.0-alpha.1: new scope and verification status
+
+The new release adds `allowAllCommands` (default **true**) and `admin_request({})`. The request opens the GUI authentication dialog, but only fresh human password authentication grants Sudo access. Requests are idempotent while pending or active and do not renew a lease. Delegated agents cannot request or inherit it; passwords must never pass through chat or tools. Native approvals remain unchanged.
+
+`admin_run` now accepts either a Bash `command` string up to **16 KiB**, optional absolute `workdir` (default `/`), and optional integer `timeoutSeconds` **1–120** (default **120**), **or** the old `operationId` alone, without command/workdir/timeout overrides. Arbitrary commands run as root Bash without a `sudo` prefix and require the authenticated immutable manifest's all-commands scope. Set `allowAllCommands: false` for legacy operation-only behavior; an empty operation list is not a safeguard when the flag is true.
+
+**Not a sandbox:** arbitrary root commands can compromise the host. Filesystem effects, services and detached processes may outlive revocation, timeout or expiry.
+
+Release validation passed locally: **228 JavaScript tests and 26 unprivileged Python tests**, with no failures or skips. `npm run check`, `git diff --check`, `npm pack --dry-run --ignore-scripts`, and the retained rc.1 composer compatibility check also passed. The client is handwritten executable JavaScript with no bundle build step. The browser bridge extension was disconnected, so there is no new real-browser or real-root smoke-test claim. The evidence in later sections is **historical evidence for 0.1.x and 0.2.x**.
+
+The new automated coverage includes:
+
+- Configuration default true, explicit false, and empty-operation behavior; frozen manifest scope cannot be widened by a run request.
+- GUI requests grant no authority, pending/active idempotency, fresh-password enforcement, cancellation, session/delegation isolation, and unchanged native approvals.
+- Both exclusive `admin_run` forms; command byte-length, absolute-workdir and integer-timeout validation; legacy operation arguments remain immutable.
+- Root Bash invocation without nested sudo, closed stdin, output limits, lease/timeout revocation and process-group cleanup using unprivileged helpers or fake sudo in automation.
+
+Still pending: the explicit human-operated smoke test in [INSTALL.md](INSTALL.md), without capturing passwords. Do not infer arbitrary-command verification from older operation-ID smoke tests. Activating an installed upgrade requires restarting the existing service and refreshing its existing page; no replacement server or real sudo execution was used during validation.
+
+## Historical initial alpha scope
 
 Target: `dsh-admin-bridge@0.1.0-alpha.1`, Linux, DSH `0.1.2-rc.1`.
 
@@ -68,7 +87,7 @@ Rollback of this live composition must remove **both** the original-row disable 
 
 A separate development pass replaces the standalone Admin header/approval workflow with **Sudo access**, the fourth option in the existing composer selector. The original three labels, glyphs and normal Full-access acknowledgement are retained; Sudo has a shield-with-key glyph. Each selection requires fresh password-based sudo authentication, including reselection while active. There is no model `admin_unlock` tool and no prerequisite to enable ordinary approval prompts.
 
-Current automated evidence, on the same Node/Python versions above:
+Historical 0.2.0-alpha.1 automated evidence, on the same Node/Python versions above:
 
 | Check | Result |
 |---|---|

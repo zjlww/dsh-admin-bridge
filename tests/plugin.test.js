@@ -121,6 +121,7 @@ async function fixture(t) {
       const worker = { closed: false, runs: 0,
         async authenticate(password) { assert.equal(password, 'synthetic-test-password'); return this; },
         async run() { this.runs++; return { exitCode: 0, stdout: '0\n', stderr: '', truncated: false, timedOut: false }; },
+        async runCommand(request) { this.command = request; return this.run(); },
         close() { if (this.closed) return; this.closed = true; this.onClose?.(); },
       };
       workers.push(worker); return worker;
@@ -142,11 +143,11 @@ async function fixture(t) {
     presets, approval, workers, notices, originalCalls, routes, state, journal, journalRecords, journalActions };
 }
 
-test('host adds only three agent-scoped tools, no model unlock, and restores command owner on unload', async t => {
+test('host adds four agent-scoped tools and restores command owner on unload', async t => {
   const f = await fixture(t);
   assert.deepEqual(f.tools.schemas().map(tool => tool.name), []);
   for (const agent of [f.first, f.second]) {
-    assert.deepEqual(f.tools.schemas(agent).map(tool => tool.name), ['admin_status', 'admin_run', 'admin_lock']);
+    assert.deepEqual(f.tools.schemas(agent).map(tool => tool.name), ['admin_request', 'admin_status', 'admin_run', 'admin_lock']);
     const result = await f.execute('admin_status', {}, agent);
     assert.equal(result.isError, false);
     assert.equal(result.value.ok, true);
@@ -175,6 +176,32 @@ test('Full access never policy can prepare a HUMAN mode intent, but it grants no
   assert.equal((await f.execute('admin_run', { operationId: 'test-op' })).value.ok, false);
   assert.equal(f.workers.length, 0);
   assert.equal(f.mode.describe(f.second.session.id).state, 'locked');
+});
+
+test('agent request opens a non-authorizing dialog and is idempotent without exposing its nonce', async t => {
+  const f = await fixture(t);
+  const before = f.state(f.first.session);
+  const requested = await f.execute('admin_request');
+  assert.equal(requested.value.ok, true);
+  assert.equal(requested.value.value.state, 'pending');
+  assert.equal(Object.hasOwn(requested.value.value, 'requestId'), false);
+  const nonce = f.mode.describe(f.first.session.id).requestId;
+  await f.execute('admin_request');
+  assert.equal(f.mode.describe(f.first.session.id).requestId, nonce);
+  assert.deepEqual(f.state(f.first.session), before);
+  assert.equal(f.workers.length, 0);
+  assert.equal((await f.execute('admin_run', { command: 'id -u' })).value.ok, false);
+  await f.mode.authenticate(f.first.session.id, nonce, 'synthetic-test-password');
+  await f.execute('admin_request');
+  assert.equal(f.mode.describe(f.first.session.id).modeActive, true);
+  assert.equal(f.workers.length, 1);
+  assert.equal((await f.execute('admin_run', { command: 'id -u', workdir: '/tmp', timeoutSeconds: 5 })).value.value.stdout, '0\n');
+  assert.deepEqual(f.workers[0].command, { command: 'id -u', workdir: '/tmp', timeoutSeconds: 5 });
+  assert.equal((await f.execute('admin_run', { command: 'id -u', operationId: 'test-op' })).value.ok, false);
+  assert.equal((await f.execute('admin_run', {})).value.ok, false);
+  assert.equal((await f.execute('admin_run', { operationId: 'test-op', workdir: '/' })).value.ok, false);
+  const child = f.addAgent('request-child', 'danger-full-access', true, { origin: 'subagent', delegationDepth: 1 });
+  assert.equal((await f.execute('admin_request', {}, child)).value.ok, false);
 });
 
 test('one human mode authentication permits repeats, re-entry requires a new nonce, and leaving denies runs', async t => {
@@ -255,7 +282,7 @@ test('journal failure cannot prevent native-mode repair or scoped tool disposal'
   await new Promise(resolve => setImmediate(resolve));
   assert.equal(f.tools.schemas(f.first).length, 0);
   assert.equal(f.commands.find(f.first, 'permission').description, 'Native permission fixture');
-  assert.equal(f.tools.schemas(f.second).length, 3);
+  assert.equal(f.tools.schemas(f.second).length, 4);
 });
 
 test('exact caller identity, strict tool fields, and raw error sanitization remain enforced', async t => {

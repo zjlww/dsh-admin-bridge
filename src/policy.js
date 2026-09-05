@@ -1,4 +1,17 @@
-// Policy data is operator-controlled, never model-supplied shell syntax.
+// Lease scope is operator-controlled; commands require its explicit shell permission.
+export const MAX_COMMAND_BYTES = 16384;
+export const MAX_WORKDIR_BYTES = 4096;
+export function validateCommand(value) {
+  exactKeys(value, ['command'], ['workdir', 'timeoutSeconds']);
+  const { command, workdir = '/', timeoutSeconds = 120 } = value;
+  if (typeof command !== 'string' || !command.trim() || !command.isWellFormed() ||
+      command.includes('\0') || Buffer.byteLength(command) > MAX_COMMAND_BYTES ||
+      typeof workdir !== 'string' || !workdir.startsWith('/') || !workdir.isWellFormed() ||
+      /[\x00-\x1f\x7f]/.test(workdir) || Buffer.byteLength(workdir) > MAX_WORKDIR_BYTES ||
+      !integer(timeoutSeconds, 1, 120))
+    fail('invalid_request', 'Command must be nonempty UTF-8 text up to 16 KiB, workdir an absolute path up to 4 KiB, and timeout 1–120 seconds.');
+  return Object.freeze({ command, workdir, timeoutSeconds });
+}
 export class BridgeError extends Error {
   constructor(code, message) { super(message); this.name = 'BridgeError'; this.code = code; }
 }
@@ -29,15 +42,16 @@ export function validateOperations(value) {
     return Object.freeze({ ...op, args: Object.freeze([...op.args]) });
   }));
 }
-export function selectManifest(operations, operationIds, ttlSeconds, maxTtlSeconds = 300) {
+export function selectManifest(operations, operationIds, ttlSeconds, maxTtlSeconds = 300, allowAllCommands = false) {
+  if (typeof allowAllCommands !== 'boolean') fail('invalid_config', 'allowAllCommands must be a boolean.');
   if (!integer(maxTtlSeconds, 30, 900) || !integer(ttlSeconds, 30, maxTtlSeconds))
     fail('invalid_request', 'Requested lifetime is outside the configured bounds.');
-  if (!Array.isArray(operationIds) || operationIds.length < 1 || operationIds.length > 16 ||
+  if (!Array.isArray(operationIds) || operationIds.length < (allowAllCommands ? 0 : 1) || operationIds.length > 16 ||
       operationIds.some(id => !identifier(id)) || new Set(operationIds).size !== operationIds.length)
     fail('invalid_request', 'Choose one or more distinct configured operation IDs.');
   const selected = operationIds.map(id => operations.find(op => op.id === id));
   if (selected.some(op => !op)) fail('invalid_request', 'Unknown configured operation.');
-  return Object.freeze({ version: 1, ttlSeconds, operations: Object.freeze(selected) });
+  return Object.freeze({ version: 1, ttlSeconds, allowAllCommands, operations: Object.freeze(selected) });
 }
 export function publicError(error) {
   return error instanceof BridgeError

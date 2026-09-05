@@ -14,6 +14,7 @@ export const name = 'admin-bridge';
 export const inject = ['agents', 'tools', 'commands', 'permissionPresets',
   'sandboxPolicy', 'approval', 'webServer', 'connection'];
 export const Config = z.object({
+  allowAllCommands: z.boolean().default(true),
   operations: z.array(z.object({
     id: z.string(),
     label: z.string(),
@@ -28,11 +29,11 @@ export const Config = z.object({
 
 /** Host singleton plus synchronously registered per-agent child scopes. */
 export function apply(ctx, config = {}, dependencies = {}) {
-  exactKeys(config, [], ['operations', 'maxTtlSeconds', 'allowedOrigins', 'stateDirectory']);
+  exactKeys(config, [], ['operations', 'maxTtlSeconds', 'allowedOrigins', 'stateDirectory', 'allowAllCommands']);
   const allowedOrigins = validateOrigins(config.allowedOrigins);
   const journal = dependencies.journal ?? new RestoreJournal(config.stateDirectory ??
     join(process.env.DSH_HOME || join(homedir(), '.dsh'), 'state', 'admin-bridge'));
-  const bridge = new SudoMode({ operations: config.operations,
+  const bridge = new SudoMode({ operations: config.operations, allowAllCommands: config.allowAllCommands,
     maxTtlSeconds: config.maxTtlSeconds }, dependencies);
   const scopes = new Map();
   const retiring = new Set();
@@ -58,7 +59,7 @@ export function apply(ctx, config = {}, dependencies = {}) {
     scopes.set(agent, scope);
     try {
       // No asynchronous plugin load inside agent/created: its notification is
-      // not awaitable. All three tools exist before this listener returns.
+      // not awaitable. All four tools exist before this listener returns.
       mountSession(scope.ctx, agent, bridge, journal);
     } catch (error) {
       retire(agent);

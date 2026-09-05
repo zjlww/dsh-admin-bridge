@@ -1,11 +1,13 @@
 import { randomUUID, timingSafeEqual } from 'node:crypto';
 import { performance } from 'node:perf_hooks';
 import { SudoWorker } from './sudo-worker.js';
-import { BridgeError, fail, identifier, integer, selectManifest, validateOperations } from './policy.js';
+import { BridgeError, fail, identifier, integer, selectManifest, validateCommand, validateOperations } from './policy.js';
 
 export class AdminBridge {
-  constructor({ operations = [], maxTtlSeconds = 300 } = {}, dependencies = {}) {
+  constructor({ operations = [], maxTtlSeconds = 300, allowAllCommands = true } = {}, dependencies = {}) {
     this.operations = validateOperations(operations);
+    if (typeof allowAllCommands !== 'boolean') fail('invalid_config', 'allowAllCommands must be a boolean.');
+    Object.defineProperty(this, 'allowAllCommands', { value: allowAllCommands, enumerable: true });
     if (!integer(maxTtlSeconds, 30, 900)) fail('invalid_config', 'Maximum lease duration must be 30–900 seconds.');
     this.maxTtlSeconds = maxTtlSeconds;
     this.workerFactory = dependencies.workerFactory ?? ((manifest, canProceed) => new SudoWorker(manifest, { canProceed }));
@@ -51,12 +53,13 @@ export class AdminBridge {
 
   describe(sessionId) {
     const record = this.check(sessionId);
-    if (!record) return { state: 'unavailable', operations: [], maxTtlSeconds: this.maxTtlSeconds };
+    if (!record) return { state: 'unavailable', operations: [], allowAllCommands: this.allowAllCommands, maxTtlSeconds: this.maxTtlSeconds };
     const enabled = this.allowed(record);
     const lease = record.lease;
     return {
       state: enabled ? (lease?.state ?? 'locked') : 'disabled',
       operations: this.operations,
+      allowAllCommands: lease ? lease.manifest.allowAllCommands === true : this.allowAllCommands,
       maxTtlSeconds: this.maxTtlSeconds,
       ...(lease ? {
         selectedOperations: lease.manifest.operations,
@@ -68,17 +71,22 @@ export class AdminBridge {
   }
 
   manifest(operationIds, ttlSeconds) {
-    const manifest = selectManifest(this.operations, operationIds, ttlSeconds, this.maxTtlSeconds);
+    const manifest = selectManifest(this.operations, operationIds, ttlSeconds, this.maxTtlSeconds, this.allowAllCommands);
     if (Buffer.byteLength(JSON.stringify(manifest)) > 32768) fail('invalid_config', 'Selected operation manifest exceeds 32 KiB.');
     return manifest;
   }
 
-  // Call ONLY after ApprovalService grants the explicit one-time action "create this lease".
+  // Trusted adapter only: creates a pending intent, never an authenticated grant.
   requestUnlock(sessionId, manifest, signal) {
     const record = this.requireAllowed(sessionId);
     if (signal?.aborted) fail('cancelled', 'Administrator request was cancelled.');
     if (record.lease) fail('busy', 'Lock the current administrator request or lease before opening another.');
     if (this.now() < record.cooldownUntil) fail('rate_limited', 'Wait before requesting authentication again.');
+    if (manifest?.allowAllCommands === true && !this.allowAllCommands)
+      fail('not_authorized', 'Arbitrary commands are disabled by configuration.');
+    manifest = selectManifest(this.operations, manifest?.operations?.map(op => op.id),
+      manifest?.ttlSeconds, this.maxTtlSeconds, manifest?.allowAllCommands ?? false);
+    if (Buffer.byteLength(JSON.stringify(manifest)) > 32768) fail('invalid_config', 'Selected operation manifest exceeds 32 KiB.');
     const lease = {
       state: 'pending', manifest, requestId: randomUUID(), worker: null,
       deadline: this.now() + this.requestTimeoutMs,
@@ -146,6 +154,19 @@ export class AdminBridge {
     const abort = () => { if (record.lease === lease) this.lock(sessionId); };
     signal?.addEventListener('abort', abort, { once: true });
     try { return await lease.worker.run(operationId); }
+    finally { signal?.removeEventListener('abort', abort); }
+  }
+
+  async runCommand(sessionId, request, signal) {
+    const record = this.requireAllowed(sessionId);
+    const lease = record.lease;
+    if (!lease || lease.state !== 'unlocked') fail('locked', 'Authenticate a Sudo access request first.');
+    if (lease.manifest.allowAllCommands !== true) fail('not_authorized', 'Arbitrary commands are not authorized by this lease.');
+    const command = validateCommand(request);
+    if (signal?.aborted) { this.lock(sessionId); fail('cancelled', 'Administrator command was cancelled.'); }
+    const abort = () => { if (record.lease === lease) this.lock(sessionId); };
+    signal?.addEventListener('abort', abort, { once: true });
+    try { return await lease.worker.runCommand(command); }
     finally { signal?.removeEventListener('abort', abort); }
   }
 

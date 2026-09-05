@@ -32,7 +32,10 @@ import time
 from types import MappingProxyType
 
 MAX_MANIFEST_BYTES = 32768
-MAX_FRAME_BYTES = 4096
+# Includes worst-case JSON escaping of command + cwd and protocol fields.
+MAX_FRAME_BYTES = 131072
+MAX_COMMAND_BYTES = 16384
+MAX_WORKDIR_BYTES = 4096
 MAX_OUTPUT_BYTES = 65536
 MAX_REQUESTS = 4096
 TERM_GRACE = 0.2
@@ -106,6 +109,7 @@ class Operation:
 class Manifest:
     ttl_seconds: int
     operations: object
+    allow_all_commands: bool = False
 
 
 def parse_manifest(encoded):
@@ -121,11 +125,17 @@ def parse_manifest(encoded):
     if len(raw) > MAX_MANIFEST_BYTES or base64.urlsafe_b64encode(raw).rstrip(b"=").decode() != encoded:
         raise Invalid("invalid manifest encoding")
     manifest = _json(raw)
-    _keys(manifest, ("version", "ttlSeconds", "operations"))
+    fields = ("version", "ttlSeconds", "operations")
+    if type(manifest) is dict and "allowAllCommands" in manifest:
+        fields += ("allowAllCommands",)
+    _keys(manifest, fields)
+    allow_all_commands = manifest.get("allowAllCommands", False)
+    if type(allow_all_commands) is not bool:
+        raise Invalid("invalid command permission")
     _integer(manifest["version"], 1, 1)
     ttl = _integer(manifest["ttlSeconds"], 30, 900)
     entries = manifest["operations"]
-    if type(entries) is not list or not 1 <= len(entries) <= 16:
+    if type(entries) is not list or not (0 if allow_all_commands else 1) <= len(entries) <= 16:
         raise Invalid("invalid operations")
     operations = {}
     for entry in entries:
@@ -146,7 +156,28 @@ def parse_manifest(encoded):
         args = tuple(_text(arg, 1024, empty=True) for arg in arguments)
         timeout = _integer(entry["timeoutSeconds"], 1, 120)
         operations[operation_id] = Operation(operation_id, label, executable, args, timeout)
-    return Manifest(ttl, MappingProxyType(operations))
+    return Manifest(ttl, MappingProxyType(operations), allow_all_commands)
+
+
+def validate_command(frame):
+    required = {"type", "id", "command"}
+    if not required <= frame.keys() or frame.keys() - required - {"workdir", "timeoutSeconds"}:
+        raise Invalid("invalid command fields")
+    command = frame["command"]
+    if type(command) is not str or not command.strip() or "\x00" in command:
+        raise Invalid("invalid command")
+    try:
+        if len(command.encode("utf-8", errors="strict")) > MAX_COMMAND_BYTES:
+            raise Invalid("command too large")
+    except UnicodeError as exc:
+        raise Invalid("invalid Unicode") from exc
+    cwd = _text(frame.get("workdir", "/"), MAX_WORKDIR_BYTES)
+    if not cwd.startswith("/") or len(cwd.encode("utf-8")) > MAX_WORKDIR_BYTES:
+        raise Invalid("invalid working directory")
+    if not os.path.isdir(cwd):
+        raise Invalid("working directory unavailable")
+    timeout = _integer(frame.get("timeoutSeconds", 120), 1, 120)
+    return command, cwd, timeout
 
 
 def validate_executable(path):
@@ -249,30 +280,40 @@ class Worker:
             _keys(frame, ("type",))
             self._revoke()
             return
-        _keys(frame, ("type", "id", "operationId"))
-        if frame["type"] != "run":
-            raise Invalid("invalid frame type")
-        request_id = _identifier(frame["id"])
-        operation_id = _identifier(frame["operationId"])
+        request_id = _identifier(frame.get("id"))
         if self.job is not None or self.output or request_id in self.seen or len(self.seen) >= MAX_REQUESTS:
             raise Invalid("busy or repeated request")
-        operation = self.manifest.operations.get(operation_id)
-        if operation is None:
-            raise Invalid("unknown operation")
+        if frame.get("type") == "runCommand":
+            if self.manifest.allow_all_commands is not True:
+                raise Invalid("command permission denied")
+            command, cwd, timeout = validate_command(frame)
+            # /bin is commonly a distro-owned symlink; validate its resolved
+            # canonical bash binary while executing the required /bin/bash path.
+            validate_executable(os.path.realpath("/bin/bash"))
+            executable, args = "/bin/bash", ("-c", command)
+        elif frame.get("type") == "run":
+            _keys(frame, ("type", "id", "operationId"))
+            operation = self.manifest.operations.get(_identifier(frame["operationId"]))
+            if operation is None:
+                raise Invalid("unknown operation")
+            validate_executable(operation.executable)
+            executable, args = operation.executable, operation.args
+            cwd, timeout = "/", operation.timeout_seconds
+        else:
+            raise Invalid("invalid frame type")
         # A policy/clock check immediately before spawn; never extend the deadline.
         now = time.monotonic()
         if self.signal_received or now >= self.deadline or self.revoked:
             self._revoke()
             return
-        validate_executable(operation.executable)
         self.seen.add(request_id)
         process = subprocess.Popen(
-            [operation.executable, *operation.args], executable=operation.executable,
+            [executable, *args], executable=executable,
             stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-            cwd="/", env=SAFE_ENV.copy(), shell=False, close_fds=True,
+            cwd=cwd, env=SAFE_ENV.copy(), shell=False, close_fds=True,
             start_new_session=True, restore_signals=True, umask=0o077,
         )
-        self.job = Job(process, request_id, min(self.deadline, now + operation.timeout_seconds),
+        self.job = Job(process, request_id, min(self.deadline, now + timeout),
                        {"stdout": process.stdout, "stderr": process.stderr})
         for name, stream in self.job.streams.items():
             os.set_blocking(stream.fileno(), False)

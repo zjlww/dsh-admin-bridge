@@ -45,7 +45,7 @@ function fixture(t, options = {}) {
   t.mock.timers.enable({ apis: ['setTimeout'] });
   const child = fakeChild(options);
   const spawns = [];
-  const worker = new SudoWorker(manifest(), {
+  const worker = new SudoWorker(options.manifest ?? manifest(), {
     authMs: 500,
     requirePassword: options.requirePassword,
     ...(Object.hasOwn(options, 'canProceed') ? { canProceed: options.canProceed } : {}),
@@ -325,6 +325,47 @@ test('run requires ready, exact manifest IDs, and a single outstanding command; 
   f.child.frame(resultFor(command, { exitCode: 7, stdout: 'out', stderr: 'err', truncated: true, timedOut: true }));
   assert.deepEqual((await running).value, { exitCode: 7, stdout: 'out', stderr: 'err', truncated: true, timedOut: true });
   assert.equal(f.worker.pending, null);
+});
+
+test('shell commands require lease permission and share framing, concurrency and watchdog', async t => {
+  const original = { ...manifest(), allowAllCommands: true };
+  const f = fixture(t, { manifest: original });
+  original.allowAllCommands = false;
+  assert.throws(() => f.worker.runCommand({ command: 'true' }), error => error.code === 'locked');
+  await ready(f);
+  assert.throws(() => f.worker.runCommand({ command: 'true', timeoutSeconds: 121 }), error => error.code === 'invalid_request');
+  const running = observe(f.worker.runCommand({ command: 'printf one | tr o O', workdir: '/tmp', timeoutSeconds: 1 }));
+  const frame = commandFrame(f);
+  assert.deepEqual(frame, { type: 'runCommand', command: 'printf one | tr o O', workdir: '/tmp', timeoutSeconds: 1, id: frame.id });
+  assert.throws(() => f.worker.run('inspect'), error => error.code === 'busy');
+  assert.throws(() => f.worker.runCommand({ command: 'true' }), error => error.code === 'busy');
+  f.child.frame(resultFor(frame));
+  await running;
+  const stalled = observe(f.worker.runCommand({ command: 'sleep 10', timeoutSeconds: 1 }));
+  t.mock.timers.tick(4000);
+  await rejected(stalled, 'locked');
+  assertClosed(f);
+});
+
+test('missing or false shell permission denies command without protocol write', async t => {
+  for (const value of [undefined, false]) {
+    await t.test(String(value), async t => {
+      const f = fixture(t, { manifest: { ...manifest(), allowAllCommands: value } });
+      await ready(f);
+      assert.throws(() => f.worker.runCommand({ command: 'true' }), error => error.code === 'not_authorized');
+      assert.equal(f.child.writes.length, 0);
+    });
+  }
+});
+
+test('live policy revokes shell dispatch before writing its frame', async t => {
+  let allowed = true;
+  const f = fixture(t, { manifest: { ...manifest(), allowAllCommands: true }, canProceed: () => allowed });
+  await ready(f);
+  allowed = false;
+  assert.throws(() => f.worker.runCommand({ command: 'true' }), error => error.code === 'policy_denied');
+  assert.equal(f.child.writes.length, 0);
+  assertClosed(f);
 });
 
 test('stale result nonce cannot satisfy a pending operation', async t => {

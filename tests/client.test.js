@@ -174,6 +174,17 @@ test('only the composer single slot is registered; exactly four native-compatibl
   await app.unmount();
 });
 
+test('agent-initiated pending status opens dialog and discloses unrestricted root scope', async () => {
+  const app = mount({ status: { ...pending('agent-request'), allowAllCommands: true, operations: [], selectedOperations: [] } });
+  await app.flush();
+  assert.deepEqual(app.commands, [], 'no manual selector command required');
+  assert.match(text(app.tree), /All commands allowed/);
+  assert.match(text(app.tree), /arbitrary bash commands as root/);
+  assert.doesNotMatch(text(app.tree), /No administrator operations are configured/);
+  assert.equal(app.requests.some(r => r.method === 'authenticate'), false);
+  await app.unmount();
+});
+
 test('keeps native glyph path fingerprints unchanged', async () => {
   const app = mount(); await app.flush();
   // Exact original path strings are pinned rather than reading a developer's installed runtime.

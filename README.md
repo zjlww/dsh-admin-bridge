@@ -1,10 +1,10 @@
 # DSH Admin Bridge
 
-**Sudo access: a fourth permission mode. Select it, authenticate once, and repeat configured administrator operations until the timer ends.**
+**Sudo access: a fourth permission mode. Agents can request it; only fresh human password authentication grants temporary root access.**
 
-A public, Linux-only plugin for [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness), targeting **DSH 0.1.2-rc.1**. Version `0.2.0-alpha.1` replaces the original separate Admin button and agent-requested unlock flow.
+A public, Linux-only plugin for [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness), targeting **DSH 0.1.2-rc.1**. Version `0.3.0-alpha.1` adds arbitrary root commands and agent-requested GUI authentication to the fourth-mode flow.
 
-> **Experimental.** This is a trusted-application convenience feature, not an audited privilege boundary. Read [SECURITY.md](SECURITY.md). The user-owned helper requires an account already permitted to run it through sudo; never grant passwordless root Python to enable it.
+> **Experimental and dangerous.** By default, authentication authorizes **all root Bash commands**, not just configured operations. This is not a sandbox or an audited privilege boundary. Read [SECURITY.md](SECURITY.md). The user-owned helper requires an account already permitted to run it through sudo; never grant passwordless root Python to enable it.
 
 ## Four modes, one selector
 
@@ -15,21 +15,22 @@ The existing composer permission selector retains its three choices and icons:
 3. **Full access**
 4. **Sudo access** — a distinct shield-with-key icon
 
-Selecting Sudo access opens one password dialog showing the fixed operation list and duration. Until authentication succeeds, the previous mode remains in effect. Successful entry adds a temporary, session-scoped root capability over Full access. The selector shows **Sudo access · time remaining**, not disabled/enabled/locked/unlocked toggles.
+Selecting Sudo access opens a password dialog showing the command scope and duration. The agent can also call `admin_request({})` to open that dialog. **A request is not permission:** the previous mode remains in effect until the human completes fresh password authentication. Successful entry adds a temporary, session-scoped root capability over Full access. The selector shows **Sudo access · time remaining**.
 
-Leaving the mode, expiry, disposal, or worker failure revokes the capability and restores the previous native mode. Selecting another native mode preserves that new choice. Selecting Sudo access again requires a **fresh authentication**, not lease renewal. Failed attempts are rate-limited and never retry a password automatically.
+Leaving the mode, expiry, disposal, or worker failure revokes the capability and restores the previous native mode. Selecting another native mode preserves that new choice. Human reselection of Sudo access requires **fresh authentication**, not lease renewal. `admin_request({})` is idempotent while active or pending: it does not replace a pending request, renew a lease, or reauthenticate an active one. Failed attempts are rate-limited and never retry a password automatically.
 
-There is **no separate enable-approvals step** and no agent `admin_unlock` tool. A human mode selection plus fresh password authentication authorizes the displayed operations. The normal modes and DSH's ordinary approval policy are unchanged. Native Full access alone, a saved preference, restart, or fork never grants root access. Delegated subagents cannot enter or inherit this mode.
+There is **no separate enable-approvals step** and no `admin_unlock` tool. The normal modes and DSH's ordinary approval policy are unchanged. Native Full access alone, a saved preference, restart, or fork never grants root access. Delegated subagents cannot request, enter, or inherit Sudo access.
 
 ## Scope and requirements
 
 - Linux, Node.js 22+, Python 3.10+ at `/usr/bin/python3`, sudo at `/usr/bin/sudo`.
 - DSH **0.1.2-rc.1**, Web profile, its native permission/command services, and the explicit compatibility extension below.
 - A trusted single-user host/browser and ordinary **password-based** sudo/PAM. MFA, `requiretty`, and passwordless `NOPASSWD` authentication are unsupported for this mode.
-- Exact operator-configured argv only. No arbitrary root shell, transparent bash interception, saved password, sudo timestamp keepalive, sudoers change, or persistent root daemon.
-- No operations are configured by default. The example below only reports the effective UID.
+- `allowAllCommands` defaults to **true**: arbitrary Bash commands run as root within the authenticated, immutable manifest scope. Set it to **false** for legacy configured-operation-only execution.
+- No transparent bash interception, saved password, sudo timestamp keepalive, sudoers change, or persistent root daemon. Ordinary `bash` tools do not acquire this capability.
+- Configured operations default to an empty list. This does **not** disable arbitrary root execution when `allowAllCommands: true`.
 
-The root helper retains authorization, **not your password**. Passwords go only from the dedicated uncontrolled input through authenticated same-origin HTTP and a private sudo pipe—not chat, model tools, argv, environment, or durable storage. Transient memory copies cannot be guaranteed erased.
+The root helper retains authorization, **not your password**. Passwords go only from the dedicated uncontrolled input through authenticated same-origin HTTP and a private sudo pipe—not chat, model tools, argv, environment, or durable storage. Agents must request the GUI dialog, never ask for a password in chat. Transient memory copies cannot be guaranteed erased.
 
 ## Install from GitHub
 
@@ -45,6 +46,9 @@ Merge this row into the selected Web profile's `cordis.patch.yml`; do not overwr
 - id: admin-bridge
   config:
     maxTtlSeconds: 60
+    # DANGER: authentication allows arbitrary root Bash commands.
+    # Set false to permit only the configured operations below.
+    allowAllCommands: true
     operations:
       - id: whoami-root
         label: Show effective user ID
@@ -60,7 +64,7 @@ For a trusted HTTPS reverse proxy on the same host, add the exact browser origin
       - https://harness.example.com
 ```
 
-Audit the entire argv and its indirect inputs before adding any meaningful operation. Executable paths must be canonical, root-owned, non-symlink and non-group/world-writable.
+Audit the entire argv and its indirect inputs before adding any configured operation. Executable paths must be canonical, root-owned, non-symlink and non-group/world-writable. These checks are not confinement for arbitrary root Bash commands.
 
 ### Required rc.1 selector extension
 
@@ -77,17 +81,31 @@ There are no install lifecycle scripts; this step is deliberate and backs up the
 
 ## Use
 
-Select **Sudo access** in the composer, review the displayed scope, and enter the password only in its dialog. Then ask the agent to run `whoami-root` twice: both results should be `0`, with one authentication.
+When root work is needed, the agent should call `admin_request({})`. Alternatively, select **Sudo access** in the composer. Review the displayed scope and enter the password **only in the GUI dialog**. After authentication, for example:
+
+```js
+admin_run({command: 'id -u', workdir: '/', timeoutSeconds: 5})
+// Or the backwards-compatible configured operation:
+admin_run({operationId: 'whoami-root'})
+```
+
+Both examples should report `0`. Commands already run in **root Bash**; no `sudo` prefix is needed.
 
 | Tool | Purpose |
 |---|---|
-| `admin_status` | Read mode status and the configured operation catalog; no authentication nonce. |
-| `admin_run` | Run one fixed operation ID already authorized by this session's active mode. |
+| `admin_status` | Read mode status, command scope and configured operations; no authentication nonce. |
+| `admin_request` | With `{}`, request the GUI password dialog; no permission is granted by the call itself. Idempotent while pending or active. |
+| `admin_run` | Run an arbitrary `command` if the active manifest allows it, or one configured `operationId`. |
 | `admin_lock` | Leave Sudo access or cancel its pending dialog and restore the previous mode. |
+
+`admin_run` accepts **exactly one** execution form:
+
+- `command`: Bash string up to **16 KiB**, optional absolute `workdir` (default `/`), optional integer `timeoutSeconds` **1–120** (default **120**).
+- `operationId`: the old configured-operation form, with no `command`, `workdir`, or `timeoutSeconds` overrides.
 
 The native `/permission sudo-access` command can also prepare the password dialog. The rc.1 slash-command popup still lists the native presets; the **composer selector** is the four-mode control. Sudo access is intentionally not a default for future sessions.
 
-**Revocation is not rollback:** completed command effects remain. Commands that launch services or escape supervision can outlive a lease. Never configure commands that print secrets; output is model-visible.
+**Revocation is not rollback:** filesystem and other command effects remain. Services, jobs and detached processes can outlive the lease. Arbitrary root commands can compromise the entire host, including this plugin; neither a timeout nor the manifest is a sandbox. Command text and output are model-visible and may persist in transcripts: never include or print secrets.
 
 ## Development and status
 
@@ -104,7 +122,7 @@ Automated tests use synthetic credentials, fake sudo processes and unprivileged 
 - [Security assumptions and reporting](SECURITY.md)
 - [Verification and development side effects](docs/VERIFICATION.md)
 
-Unsupported: arbitrary root shells, password vault/keyring storage, untrusted multi-user hosts, Windows/macOS, polkit, MFA, or an independently secured root-owned broker. An independent security audit and broader distribution/browser testing remain necessary.
+Unsupported: interactive password conversations inside commands, password vault/keyring storage, untrusted multi-user hosts, Windows/macOS, polkit, MFA, or an independently secured root-owned broker. An independent security audit and broader distribution/browser testing remain necessary.
 
 ## License
 

@@ -26,7 +26,7 @@ function fixture(t, options = {}) {
   let now = 1000;
   const workers = [];
   const states = new Map();
-  const mode = new SudoMode({ operations: options.operations ?? operations, maxTtlSeconds: 30 }, {
+  const mode = new SudoMode({ operations: options.operations ?? operations, allowAllCommands: options.allowAllCommands, maxTtlSeconds: 30 }, {
     now: () => now, requestTimeoutMs: 2000,
     workerFactory: (manifest, canProceed) => {
       const worker = {
@@ -36,6 +36,7 @@ function fixture(t, options = {}) {
           return options.authentication?.promise ?? Promise.resolve();
         },
         run(id) { this.calls.push(id); return Promise.resolve({ exitCode: 0, stdout: 'ok' }); },
+        runCommand(request) { this.calls.push(request); return Promise.resolve({ exitCode: 0, stdout: 'shell-ok' }); },
         close() { this.closeCount++; this.onClose?.(); },
       };
       workers.push(worker);
@@ -141,11 +142,46 @@ test('begin fixes the entire allowlist and TTL without changing either native kn
   assert.deepEqual(f.state.restores, []);
 });
 
-test('empty operator allowlist cannot open an authentication request', t => {
-  const f = fixture(t, { operations: [] });
+test('empty restricted operator allowlist cannot open an authentication request', t => {
+  const f = fixture(t, { operations: [], allowAllCommands: false });
   assert.throws(() => f.state.begin(), code('invalid_request'));
   assert.equal(f.mode.describe('a').state, 'locked');
   assert.equal(f.workers.length, 0);
+});
+
+test('agent intent permits all commands only after GUI authentication and native commit', async t => {
+  const f = fixture(t, { operations: [] });
+  assert.equal(f.mode.allowAllCommands, true);
+  assert.equal(f.mode.describe('a').allowAllCommands, true);
+  const intent = { source: 'agent-tool', identity: f.state.identity };
+  f.state.delegated = true;
+  assert.throws(() => f.mode.begin('a', intent), code('policy_denied'));
+  f.state.delegated = false;
+  assert.throws(() => f.mode.begin('a', { ...intent, identity: {} }), code('invalid_session'));
+  const pending = f.mode.begin('a', intent);
+  assert.equal(pending.allowAllCommands, true);
+  assert.deepEqual(f.state.native, workspace);
+  await assert.rejects(f.mode.runCommand('a', { command: 'printf test' }), code('locked'));
+  await f.mode.authenticate('a', pending.requestId, SECRET);
+  assert.equal(f.workers[0].manifest.allowAllCommands, true);
+  assert.equal(Object.isFrozen(f.workers[0].manifest), true);
+  assert.equal((await f.mode.runCommand('a', { command: 'printf test' })).stdout, 'shell-ok');
+  assert.deepEqual(f.workers[0].calls, [{ command: 'printf test', workdir: '/', timeoutSeconds: 120 }]);
+  f.add('other-session', full);
+  await assert.rejects(f.mode.runCommand('other-session', { command: 'true' }), code('locked'));
+  f.mode.lock('a');
+  await assert.rejects(f.mode.runCommand('a', { command: 'true' }), code('locked'));
+  assert.deepEqual(f.state.native, workspace);
+});
+
+test('restricted mode permits legacy IDs but refuses arbitrary commands', async t => {
+  const f = fixture(t, { allowAllCommands: false });
+  await f.enter();
+  assert.equal(f.mode.describe('a').allowAllCommands, false);
+  assert.equal(f.workers[0].manifest.allowAllCommands, false);
+  await f.mode.run('a', 'inspect');
+  await assert.rejects(f.mode.runCommand('a', { command: 'true' }), code('not_authorized'));
+  assert.deepEqual(f.workers[0].calls, ['inspect']);
 });
 
 test('successful password entry commits Full access plus capability, never ask policy', async t => {

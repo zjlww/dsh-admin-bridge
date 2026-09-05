@@ -31,8 +31,8 @@ function sync(callback, ...args) {
  * preset nor the recovery journal grants root: only this exact live record and
  * its authenticated helper do. The raw bridge is deliberately not exported.
  *
- * A trusted human-command adapter owns begin(). Never mount begin/requestUnlock
- * as an agent tool, HTTP endpoint, settings setter or generic preset setter.
+ * Trusted command/tool adapters may prepare begin() intents. Only the protected
+ * GUI password route authenticates them; no tool, preset or intent grants root.
  */
 export class SudoMode {
   #bridge;
@@ -48,6 +48,7 @@ export class SudoMode {
   }
 
   get operations() { return this.#bridge.operations; }
+  get allowAllCommands() { return this.#bridge.allowAllCommands; }
   get maxTtlSeconds() { return this.#bridge.maxTtlSeconds; }
   manifest(ids, ttlSeconds) { return this.#bridge.manifest(ids, ttlSeconds); }
 
@@ -105,12 +106,12 @@ export class SudoMode {
   /**
    * Create one password intent, not authority. identity cannot be supplied by a
    * JSON/model caller; the adapter supplies its captured, exact receiving agent.
-   * The complete frozen operator allowlist and configured TTL are noneditable.
+   * The complete frozen operator scope and configured TTL are noneditable.
    */
   begin(sessionId, intent) {
     const record = this.#sessions.get(sessionId);
     if (!record || record.retiring || !this.#live(record) ||
-        intent?.source !== 'permission-command' || intent.identity !== record.hooks.identity)
+        !['permission-command', 'agent-tool'].includes(intent?.source) || intent.identity !== record.hooks.identity)
       fail('invalid_session', 'Select Sudo access in this live session’s permission picker.');
     if (record.hooks.isDelegated && sync(record.hooks.isDelegated) !== false)
       fail('policy_denied', 'Delegated sessions cannot enter Sudo access.');
@@ -182,8 +183,15 @@ export class SudoMode {
   async run(sessionId, operationId, signal) {
     const record = this.#sessions.get(sessionId);
     if (!record || record.mode?.phase !== 'active' || !this.describe(sessionId).modeActive)
-      fail('locked', 'Select Sudo access and authenticate in the permission picker first.');
+      fail('locked', 'Use admin_request or select Sudo access, then authenticate in the GUI first.');
     return this.#bridge.run(sessionId, operationId, signal);
+  }
+
+  async runCommand(sessionId, request, signal) {
+    const record = this.#sessions.get(sessionId);
+    if (!record || record.mode?.phase !== 'active' || !this.describe(sessionId).modeActive)
+      fail('locked', 'Use admin_request or select Sudo access, then authenticate in the GUI first.');
+    return this.#bridge.runCommand(sessionId, request, signal);
   }
 
   describe(sessionId) {

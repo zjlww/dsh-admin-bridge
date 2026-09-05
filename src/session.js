@@ -102,8 +102,8 @@ export function nativeCallbacks(ctx, agent, journal = ctx.get('adminBridgeJourna
       const full = presets.resolve('danger-full-access');
       if (full.sandbox !== 'danger-full-access' || full.approval !== 'never')
         fail('unavailable', 'Sudo access requires the standard Full access preset.');
-      // Called only after fresh password authentication for an explicit human
-      // mode intent. No agent tool exposes this transition or begins an intent.
+      // Called only after fresh human password authentication, including when
+      // an agent requested the dialog. Requesting alone never grants authority.
       approval.setPolicy(agent, 'never');
       presets.set(session, 'danger-full-access');
     },
@@ -134,7 +134,7 @@ export function nativeCallbacks(ctx, agent, journal = ctx.get('adminBridgeJourna
   return callbacks;
 }
 
-/** Human-only command intent plus three read/run/revoke tools; no unlock tool. */
+/** Human-authenticated mode with agent request/read/run/revoke tools. */
 export function mountSession(ctx, agent, mode, journal = ctx.get('adminBridgeJournal')) {
   if (!agent || ctx.agent !== agent) fail('invalid_session', 'An exact live agent scope is required.');
   const session = agent.session;
@@ -144,13 +144,13 @@ export function mountSession(ctx, agent, mode, journal = ctx.get('adminBridgeJou
   const original = commands?.find(agent, 'permission');
   if (!tools || !original) fail('unavailable', 'The native permission command is unavailable.');
   const callbacks = nativeCallbacks(ctx, agent, journal);
-  const register = (name, description, parameters, required, run) => tools.register(defineTool({
+  const register = (name, description, parameters, required, run, optional = []) => tools.register(defineTool({
     name, description, parameters, output,
     async execute(args, exec) {
       try {
         if (exec.agent !== agent || exec.agent.session !== session)
           fail('invalid_session', 'This tool belongs to a different live session.');
-        exactKeys(args, required);
+        exactKeys(args, required, optional);
         if (exec.signal.aborted) fail('cancelled', 'Administrator operation was cancelled.');
         return { ok: true, value: await run(args, exec) };
       } catch (error) { return { ok: false, error: publicError(error) }; }
@@ -187,16 +187,35 @@ export function mountSession(ctx, agent, mode, journal = ctx.get('adminBridgeJou
         return original.handler(invocation);
       },
     });
+    yield register('admin_request',
+      'Actively request Sudo access when the task needs root privileges. Opens this session’s GUI password dialog; does not grant access until the human authenticates. Check admin_status afterward, then use admin_run. Never request or accept passwords in chat or tools; do not repeat a cancelled request without human direction.',
+      {}, [], () => {
+        const current = mode.describe(sessionId);
+        if (!current.modeActive && !['pending', 'authenticating'].includes(current.state))
+          mode.begin(sessionId, { source: 'agent-tool', identity: agent });
+        const { requestId: _browserOnly, ...status } = mode.describe(sessionId);
+        return status;
+      });
     yield register('admin_status',
-      'Read this session’s Sudo access mode and configured operations. Only the human can enter Sudo access using the permission selector and password dialog; never request a password in chat or tools.',
+      'Read this session’s Sudo access mode and command scope. If root access is needed and inactive, use admin_request to open the GUI authentication dialog. Only human password authentication grants access; never request a password in chat or tools.',
       {}, [], () => {
         const { requestId: _browserOnly, ...status } = mode.describe(sessionId);
         return status;
       });
     yield register('admin_run',
-      'Run one exact configured operation authorized by this session’s active Sudo access mode. The human must first select Sudo access and authenticate in the GUI. Takes an operation ID, not shell syntax or arguments.',
-      { operationId: { type: 'string', required: true, description: 'An ID in this session’s authorized operation set.' } },
-      ['operationId'], (args, exec) => mode.run(sessionId, args.operationId, exec.signal));
+      'Run any root shell command under this session’s authenticated Sudo access. When inactive, first call admin_request and wait for human GUI authentication. Supply command (bash syntax; no sudo prefix needed), or a legacy operationId, never both. Output is model-visible; do not print secrets. Leaving Sudo revokes authorization, not completed effects.',
+      { command: { type: 'string', description: 'Root bash command, up to 16 KiB.' },
+        workdir: { type: 'string', description: 'Absolute working directory for command; defaults to /.' },
+        timeoutSeconds: { type: 'integer', description: 'Command timeout, 1–120 seconds; defaults to 120.' },
+        operationId: { type: 'string', description: 'Alternatively, a configured operation ID; no command options allowed.' } },
+      [], (args, exec) => {
+        if (Object.hasOwn(args, 'operationId')) {
+          exactKeys(args, ['operationId']);
+          return mode.run(sessionId, args.operationId, exec.signal);
+        }
+        exactKeys(args, ['command'], ['workdir', 'timeoutSeconds']);
+        return mode.runCommand(sessionId, args, exec.signal);
+      }, ['command', 'workdir', 'timeoutSeconds', 'operationId']);
     yield register('admin_lock',
       'Leave Sudo access or cancel pending authentication, revoke root authorization, and restore this session’s previous permission mode. Does not affect other sessions.',
       {}, [], () => mode.lock(sessionId));

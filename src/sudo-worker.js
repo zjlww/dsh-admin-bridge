@@ -1,18 +1,20 @@
 import { spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
-import { BridgeError, fail, isObject } from './policy.js';
+import { BridgeError, fail, isObject, validateCommand } from './policy.js';
 
 const RUNNER = fileURLToPath(new URL('../helper/runner.py', import.meta.url));
 const MAX_FRAME = 1024 * 1024;
 const AUTH_MS = 45_000;
 const safeEnvironment = Object.freeze({ PATH: '/usr/sbin:/usr/bin:/sbin:/bin', LANG: 'C', LC_ALL: 'C' });
 
-// Each worker owns private pipes. No shell, PTY, timestamp keepalive, or secret in argv/env.
+// Each worker owns private pipes. No PTY, timestamp keepalive, or secret in argv/env.
+// Authorized shell commands travel only as framed requests after authentication.
 export class SudoWorker {
   constructor(manifest, { spawnProcess = spawn, authMs = AUTH_MS, canProceed = () => true,
     requirePassword = false } = {}) {
-    this.manifest = manifest;
+    this.manifest = Object.freeze({ ...manifest, operations: Object.freeze(manifest.operations.map(op =>
+      Object.freeze({ ...op, args: Object.freeze([...op.args]) }))) });
     this.requirePassword = requirePassword === true;
     this.canProceed = () => { try { return canProceed() === true; } catch { return false; } };
     this.spawnProcess = spawnProcess;
@@ -132,11 +134,25 @@ export class SudoWorker {
     if (this.pending) fail('busy', 'Another administrator operation is running.');
     const op = this.manifest.operations.find(item => item.id === operationId);
     if (!op) fail('not_authorized', 'This operation is not in the authorized set.');
+    return this.#dispatch({ type: 'run', operationId }, op.timeoutSeconds);
+  }
+
+  runCommand(request) {
+    if (!this.ready || this.closed) fail('locked', 'Administrator access is locked.');
+    if (this.pending) fail('busy', 'Another administrator operation is running.');
+    if (this.manifest.allowAllCommands !== true) fail('not_authorized', 'Arbitrary commands are not authorized by this lease.');
+    const command = validateCommand(request);
+    return this.#dispatch({ type: 'runCommand', ...command }, command.timeoutSeconds);
+  }
+
+  #dispatch(frame, timeoutSeconds) {
+    if (!this.canProceed()) { this.close(); fail('policy_denied', 'Administrator authorization is no longer available.'); }
     return new Promise((resolve, reject) => {
       const id = randomUUID();
-      const timer = setTimeout(() => this.close(), (op.timeoutSeconds + 3) * 1000);
+      const timer = setTimeout(() => this.close(), (timeoutSeconds + 3) * 1000);
       this.pending = { id, resolve, reject, timer };
-      this.child.stdin.write(JSON.stringify({ type: 'run', id, operationId }) + '\n');
+      try { this.child.stdin.write(JSON.stringify({ ...frame, id }) + '\n'); }
+      catch { this.close(); }
     });
   }
 

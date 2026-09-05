@@ -4,8 +4,15 @@
     - id: admin-bridge
       name: dsh-admin-bridge
       config:
-        # Operator-owned exact argv allowlist. Empty means no privileged command.
+        # 0.3.0-alpha.1: defaults true. DANGER: after fresh human password
+        # authentication, permits arbitrary root Bash commands (not a sandbox).
+        # An empty operations list does NOT disable that scope.
+        # Set false for legacy configured-operation-only execution.
+        allowAllCommands: true
         operations: []
+        # Agents may call admin_request({}) to open the GUI dialog; the request
+        # itself grants no permission. Never supply a password in chat/tools.
+        # Command effects and detached processes can outlive the lease.
         maxTtlSeconds: 300
         # Empty allows only same-origin loopback HTTP from a loopback peer.
         # Remote use requires explicitly named HTTPS origins plus DSH host trust.

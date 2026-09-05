@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { AdminBridge } from '../src/bridge.js';
-import { BridgeError, publicError, selectManifest, validateOperations } from '../src/policy.js';
+import { BridgeError, publicError, selectManifest, validateCommand, validateOperations } from '../src/policy.js';
 
 // Only synthetic credentials and injected workers are used; these tests never spawn sudo.
 const SECRET = 'synthetic-unit-test-secret';
@@ -50,6 +50,7 @@ function fixture(t, options = {}) {
           }
           return Promise.resolve({ exitCode: 0, stdout: 'ok', stderr: '', truncated: false, timedOut: false });
         },
+        runCommand(request) { return this.run(request); },
         close() {
           this.closeCount++;
           this.pendingRun?.reject(new BridgeError('locked', 'Worker closed.'));
@@ -112,6 +113,48 @@ test('policy validates immutable fixed argv and rejects invalid definitions and 
     assert.ok(Object.isFrozen(manifest));
     assert.ok(Object.isFrozen(manifest.operations));
   }
+});
+
+test('arbitrary command validation bounds Unicode bytes, cwd, shape and timeout', () => {
+  assert.deepEqual(validateCommand({ command: 'echo one\necho two' }),
+    { command: 'echo one\necho two', workdir: '/', timeoutSeconds: 120 });
+  for (const request of [null, {}, { command: '' }, { command: '  \n' }, { command: 1 },
+    { command: '\0' }, { command: '\ud800' }, { command: 'é'.repeat(8193) },
+    { command: 'true', workdir: 'relative' }, { command: 'true', workdir: '/a\n' },
+    { command: 'true', workdir: '/' + 'é'.repeat(2048) },
+    ...[0, 121, true, 1.5, '1', null].map(timeoutSeconds => ({ command: 'true', timeoutSeconds })),
+    { command: 'true', operationId: 'inspect' }, { command: 'true', env: {} }]) {
+    assert.throws(() => validateCommand(request), code('invalid_request'));
+  }
+  assert.ok(Object.isFrozen(validateCommand({ command: 'x'.repeat(16384), workdir: '/tmp', timeoutSeconds: 1 })));
+  for (const allowAllCommands of [null, 1, 'true', {}])
+    assert.throws(() => new AdminBridge({ allowAllCommands }), code('invalid_config'));
+});
+
+test('arbitrary command cancellation and expiry revoke the same authenticated lease', async t => {
+  const f = fixture(t, { holdRun: true });
+  await unlock(f);
+  const controller = new AbortController();
+  const running = observe(f.bridge.runCommand('session-a', { command: 'sleep 10', timeoutSeconds: 2 }, controller.signal));
+  controller.abort();
+  await rejected(running, 'locked');
+  assert.equal(f.workers[0].closeCount, 1);
+  await unlock(f);
+  const next = observe(f.bridge.runCommand('session-a', { command: 'sleep 10' }));
+  f.advance(30000);
+  await rejected(next, 'locked');
+  await assert.rejects(f.bridge.runCommand('session-a', { command: 'true' }), code('locked'));
+});
+
+test('legacy manifest cannot acquire shell permission through config or later mutation', async t => {
+  const f = fixture(t);
+  const manifest = { version: 1, ttlSeconds: 30, operations: operations().slice(0, 1) };
+  const pending = observe(f.bridge.requestUnlock('session-a', manifest));
+  manifest.allowAllCommands = true;
+  await f.bridge.authenticate('session-a', f.bridge.describe('session-a').requestId, SECRET);
+  await pending;
+  assert.equal(f.bridge.describe('session-a').allowAllCommands, false);
+  await assert.rejects(f.bridge.runCommand('session-a', { command: 'true' }), code('not_authorized'));
 });
 
 test('configuration rejects excessive manifests and invalid maximum TTL', t => {
