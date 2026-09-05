@@ -90,15 +90,24 @@ export function createHandler({ bridge, requestRejection, allowedOrigins = [] })
         respond(res, 404, { error: { code: 'not_found', message: 'Unknown administrator endpoint.' } }); return;
       }
       let payload = await body(req);
-      exactKeys(payload, endpoint === 'authenticate' ? ['sessionId', 'requestId', 'password'] : ['sessionId']);
+      exactKeys(payload, endpoint === 'authenticate' ? ['sessionId', 'requestId', 'password'] : ['sessionId'],
+        endpoint === 'lock' ? ['requestId'] : []);
       if (!identifier(payload.sessionId)) fail('invalid_request', 'Invalid session identifier.');
+      if (endpoint === 'lock' && Object.hasOwn(payload, 'requestId') && !identifier(payload.requestId))
+        fail('invalid_request', 'Invalid authentication request identifier.');
       if (res.destroyed) {
         if (endpoint === 'authenticate') bridge.cancelRequest(payload.sessionId, payload.requestId);
         return;
       }
       let value;
       if (endpoint === 'status') value = bridge.describe(payload.sessionId);
-      else if (endpoint === 'lock') value = bridge.lock(payload.sessionId);
+      else if (endpoint === 'lock') {
+        if (payload.requestId !== undefined) {
+          // Stale dialogs and late disconnects must not revoke a newer entry.
+          bridge.cancelRequest(payload.sessionId, payload.requestId);
+          value = bridge.describe(payload.sessionId);
+        } else value = bridge.lock(payload.sessionId);
+      }
       else {
         const { sessionId, requestId } = payload;
         const disconnect = () => { if (!res.writableEnded) bridge.cancelRequest(sessionId, requestId); };

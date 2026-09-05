@@ -64,6 +64,28 @@ The browser automation extension was disconnected, so GUI interaction was perfor
 
 Rollback of this live composition must remove **both** the original-row disable and the distinct live insert, remove the package through DSH, then restart the existing service at a safe turn boundary and refresh the page.
 
+## Fourth-mode implementation — 0.2.0-alpha.1
+
+A separate development pass replaces the standalone Admin header/approval workflow with **Sudo access**, the fourth option in the existing composer selector. The original three labels, glyphs and normal Full-access acknowledgement are retained; Sudo has a shield-with-key glyph. Each selection requires fresh password-based sudo authentication, including reselection while active. There is no model `admin_unlock` tool and no prerequisite to enable ordinary approval prompts.
+
+Current automated evidence, on the same Node/Python versions above:
+
+| Check | Result |
+|---|---|
+| `npm test` — JavaScript | **215 passed**, no failures/skips |
+| `npm test` — unprivileged Python | **22 passed**, no failures/skips |
+| `npm run check`, `git diff --check` | Passed |
+| `npm pack --dry-run --ignore-scripts` | 21 source/documentation files; no dependencies or secrets |
+| `npm install --ignore-scripts` | 44 packages audited, zero vulnerabilities |
+
+New coverage includes 26 synthetic component tests, native SVG fingerprints, 27 mode-controller tests, 23 private rollback-journal tests, guarded compatibility apply/revert tests, real Cordis command ownership and disposal, actual DSH Session snapshot replay, delegation headers, explicit same-value exits, native-choice preservation, journal-ahead-of-log crash recovery, and fresh-password challenge enforcement. HTTP/client cancellation is bound to its original nonce; stale dialogs cannot revoke a newer entry. These tests do **not** enter a real password or execute privileged commands.
+
+Integration review found and fixed two rc.1 compatibility issues before deployment: its session persistence does not accept arbitrary unmarked event types, and Session.append cannot be reentered from native event observers. Mode rollback therefore uses a private, strictly validated, fsynced metadata file rather than unsupported custom session events. This contains no password, authentication nonce or restorable root authority. The original session creation identity and native event cutoffs distinguish rollback from newer human choices.
+
+The only core change is the explicit two-artifact composer compatibility rebuild documented in `compat/README.md`, with an unchanged native fallback. There is no new sandbox enum, global default, generic renderer patch, unrestricted root shell, or replacement Web server. The plugin explicitly refreshes already-built client artifacts in DSH's revision graph during live activation; this is not a source watcher or a promise of refresh-free browser updates.
+
+**The successful real sudo test above belongs to 0.1.x, not this new mode flow.** Live deployment, fourth-option/icon visibility and a new human-operated password test must be verified separately; no screenshot or password capture is needed.
+
 ## Remaining work
 
 - Enable GitHub Actions with appropriate repository authorization and exercise Node 22/24 on supported distributions.

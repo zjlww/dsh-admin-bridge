@@ -3,7 +3,7 @@ import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
 
 const root = fileURLToPath(new URL('../', import.meta.url));
-for (const directory of ['src', 'client', 'scripts', 'tests']) {
+for (const directory of ['src', 'client', 'compat', 'scripts', 'tests']) {
   for (const file of await readdir(new URL(`../${directory}/`, import.meta.url))) {
     if (!/\.(?:mjs|js)$/.test(file)) continue;
     const result = spawnSync(process.execPath, ['--check', `${directory}/${file}`], { cwd: root, stdio: 'inherit' });

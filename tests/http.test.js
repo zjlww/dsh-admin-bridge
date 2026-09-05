@@ -174,6 +174,36 @@ test('valid status, lock, and authentication dispatch only the exact expected ar
   }
 });
 
+test('browser cancellation is bound to its exact nonce rather than an unconditional session lock', async () => {
+  const response = await request({ url: `${HTTP_PREFIX}lock`,
+    payload: { sessionId: 'session-a', requestId: 'old-dialog-nonce' } });
+  assert.equal(response.res.statusCode, 200);
+  assert.deepEqual(response.bridge.calls, [['cancel', 'session-a', 'old-dialog-nonce'], ['status', 'session-a']]);
+});
+
+test('stale dialog cancellation leaves a newer authenticated mode intact', async () => {
+  let active = true;
+  const bridge = bridgeDouble({
+    lock() { assert.fail('stale dialog must not unconditionally lock this session'); },
+    cancelRequest(sessionId, requestId) {
+      assert.equal(sessionId, 'session-a');
+      if (requestId === 'current-nonce') active = false;
+    },
+    describe() { return { state: active ? 'unlocked' : 'locked', modeActive: active }; },
+  });
+  const response = await request({ bridge, url: `${HTTP_PREFIX}lock`,
+    payload: { sessionId: 'session-a', requestId: 'old-nonce' } });
+  assert.equal(response.json.value.modeActive, true);
+});
+
+test('conditional cancellation rejects malformed nonce or extra authority fields before dispatch', async () => {
+  for (const requestId of [null, '', '../other', [], 1, 'x'.repeat(65)]) {
+    errorResponse(await request({ url: `${HTTP_PREFIX}lock`, payload: { sessionId: 'session-a', requestId } }), 400, 'invalid_request');
+  }
+  errorResponse(await request({ url: `${HTTP_PREFIX}lock`,
+    payload: { sessionId: 'session-a', requestId: 'valid-nonce', operationId: 'any' } }), 400, 'invalid_request');
+});
+
 test('only known exact routes exist: no unrestricted command or unlock endpoint', async () => {
   for (const url of ['/status', '/admin-bridge/v1', `${HTTP_PREFIX}run`, `${HTTP_PREFIX}unlock`,
     `${HTTP_PREFIX}exec`, `${HTTP_PREFIX}status/`, `${HTTP_PREFIX}status?sessionId=session-a`,

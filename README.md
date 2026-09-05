@@ -1,48 +1,50 @@
 # DSH Admin Bridge
 
-**Authenticate once. Run a selected set of administrator commands for a short time. Never save the sudo password.**
+**Sudo access: a fourth permission mode. Select it, authenticate once, and repeat configured administrator operations until the timer ends.**
 
-A public, Linux-only plugin for [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness), initially targeting **DSH 0.1.2-rc.1**.
+A public, Linux-only plugin for [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness), targeting **DSH 0.1.2-rc.1**. Version `0.2.0-alpha.1` replaces the original separate Admin button and agent-requested unlock flow.
 
-> **Experimental.** This is a trusted-application convenience feature, not a sandbox or an independently audited privilege boundary. Read [SECURITY.md](SECURITY.md) before installing. An account already permitted to run the helper through sudo is required. Do not grant passwordless root Python to enable it.
+> **Experimental.** This is a trusted-application convenience feature, not an audited privilege boundary. Read [SECURITY.md](SECURITY.md). The user-owned helper requires an account already permitted to run it through sudo; never grant passwordless root Python to enable it.
 
-## What it does
+## Four modes, one selector
 
-1. The agent requests a session-bound lease for specific configured operation IDs and a duration.
-2. DSH asks you to approve creation of that exact lease.
-3. **Admin** in the conversation header opens a password dialog.
-4. You enter your sudo password there—not in chat. The plugin sends it once to sudo over a private pipe and discards it.
-5. The agent can repeat the selected operations without another password during the lease.
-6. **Lock now**, expiration, session disposal, or disabled approvals revoke access.
+The existing composer permission selector retains its three choices and icons:
 
-The root helper retains authorization, not your password. There is no sudo timestamp keepalive, sudoers modification, persistent root daemon, unrestricted `sudo` tool, or change to the built-in bash tool. No operations are configured by default.
+1. **Read Only**
+2. **Workspace Write**
+3. **Full access**
+4. **Sudo access** — a distinct shield-with-key icon
 
-## Requirements
+Selecting Sudo access opens one password dialog showing the fixed operation list and duration. Until authentication succeeds, the previous mode remains in effect. Successful entry adds a temporary, session-scoped root capability over Full access. The selector shows **Sudo access · time remaining**, not disabled/enabled/locked/unlocked toggles.
 
-- Linux; Node.js 22+; Python 3.10+ at `/usr/bin/python3`; sudo at `/usr/bin/sudo`.
-- DSH **0.1.2-rc.1**, Web profile, and a session with approval prompts enabled.
-- A trusted single-user Harness host and trusted browser/plugins. Ordinary password-based sudo/PAM authentication; interactive MFA and `requiretty` are unsupported.
-- Local loopback HTTP, or an explicitly allowlisted HTTPS origin with a local HTTPS reverse proxy. Remote plaintext HTTP is rejected.
+Leaving the mode, expiry, disposal, or worker failure revokes the capability and restores the previous native mode. Selecting another native mode preserves that new choice. Selecting Sudo access again requires a **fresh authentication**, not lease renewal. Failed attempts are rate-limited and never retry a password automatically.
 
-**This does not bypass disabled approval prompts.** If your session policy is `never`, it cannot unlock or use an administrator lease.
+There is **no separate enable-approvals step** and no agent `admin_unlock` tool. A human mode selection plus fresh password authentication authorizes the displayed operations. The normal modes and DSH's ordinary approval policy are unchanged. Native Full access alone, a saved preference, restart, or fork never grants root access. Delegated subagents cannot enter or inherit this mode.
+
+## Scope and requirements
+
+- Linux, Node.js 22+, Python 3.10+ at `/usr/bin/python3`, sudo at `/usr/bin/sudo`.
+- DSH **0.1.2-rc.1**, Web profile, its native permission/command services, and the explicit compatibility extension below.
+- A trusted single-user host/browser and ordinary **password-based** sudo/PAM. MFA, `requiretty`, and passwordless `NOPASSWD` authentication are unsupported for this mode.
+- Exact operator-configured argv only. No arbitrary root shell, transparent bash interception, saved password, sudo timestamp keepalive, sudoers change, or persistent root daemon.
+- No operations are configured by default. The example below only reports the effective UID.
+
+The root helper retains authorization, **not your password**. Passwords go only from the dedicated uncontrolled input through authenticated same-origin HTTP and a private sudo pipe—not chat, model tools, argv, environment, or durable storage. Transient memory copies cannot be guaranteed erased.
 
 ## Install from GitHub
 
-This package is not published to npm. Install a reviewed Git commit through DSH's plugin manager, not a similarly named registry package:
+This package is not published to npm. Install a reviewed commit through DSH's manager:
 
 ```sh
-# Replace <reviewed-commit> with the full commit SHA you reviewed.
-dsh plugin --profile web add 'github:zjlww/dsh-admin-bridge#<reviewed-commit>'
+dsh plugin --profile web add 'github:zjlww/dsh-admin-bridge#<reviewed-commit>' --ignore-scripts
 ```
 
-There is no build step or install script: server code, Python helper and the hand-written browser module are checked-in source. DSH reconciles `dsh.bundle.patch` into its profile.
-
-Then configure the allowlist in the Web profile's `cordis.patch.yml` (normally `~/.dsh/profiles/web/cordis.patch.yml`). **Merge** this row into the existing YAML list; do not overwrite your other configuration:
+Merge this row into the selected Web profile's `cordis.patch.yml`; do not overwrite other entries:
 
 ```yaml
 - id: admin-bridge
   config:
-    maxTtlSeconds: 300
+    maxTtlSeconds: 60
     operations:
       - id: whoami-root
         label: Show effective user ID
@@ -51,39 +53,43 @@ Then configure the allowlist in the Web profile's `cordis.patch.yml` (normally `
         timeoutSeconds: 5
 ```
 
-The example only prints the effective UID; it does not change system state. Audit the entire command and all indirect inputs before configuring more powerful operations. Executables and all path components must be root-owned, non-group/world-writable and non-symlinks; use canonical paths such as `/usr/bin/id`, not `/bin/id` on merged-usr systems. Arguments are fixed; the model cannot supply replacements.
-
-For an HTTPS reverse proxy running on the same machine, also set the exact browser origin (no trailing slash):
+For a trusted HTTPS reverse proxy on the same host, add the exact browser origin under that same config:
 
 ```yaml
     allowedOrigins:
       - https://harness.example.com
 ```
 
-Keep DSH's own trusted-host/browser authentication configured too. Do not enable request-body logging at your proxy or application instrumentation.
+Audit the entire argv and its indirect inputs before adding any meaningful operation. Executable paths must be canonical, root-owned, non-symlink and non-group/world-writable.
 
-Restart **your existing DSH Web process** through your normal service manager, then refresh the existing browser page. Installing this repository alone does not update a running GUI. See [installation and rollback](docs/INSTALL.md) for checks and limitations.
+### Required rc.1 selector extension
+
+This DSH prerelease hardcodes the composer selector. The plugin supplies a small, explicit, version-guarded compatibility rebuild that adds a **single replaceable permission-control slot with the untouched native selector as fallback**. It does not replace the renderer, native permission service, or their three presets.
+
+From the installed plugin or reviewed checkout, replacing `/path/to/dsh/runtime` with the actual npm runtime directory:
+
+```sh
+node compat/permission-slot.mjs --check --runtime /path/to/dsh/runtime
+node compat/permission-slot.mjs --apply --runtime /path/to/dsh/runtime
+```
+
+There are no install lifecycle scripts; this step is deliberate and backs up the original affected artifacts. See [compatibility details](compat/README.md). Restart the **existing** DSH Web process at a safe turn boundary, then refresh its existing URL. Never start a replacement server to update the current GUI. See [installation, migration and rollback](docs/INSTALL.md).
 
 ## Use
 
-Ask the agent:
+Select **Sudo access** in the composer, review the displayed scope, and enter the password only in its dialog. Then ask the agent to run `whoami-root` twice: both results should be `0`, with one authentication.
 
-> Request a 60-second administrator lease for `whoami-root`, then run it twice.
-
-Approve the native DSH lease request, then authenticate in the Admin dialog. The successful demonstration returns `0` twice. Never paste the password into a user message or a tool argument.
-
-| Agent tool | Purpose |
+| Tool | Purpose |
 |---|---|
-| `admin_status` | List configured operations and this session's public lease status. |
-| `admin_unlock` | Request native approval, then wait for GUI authentication. |
-| `admin_run` | Execute one operation ID already included in the active lease. |
-| `admin_lock` | Cancel a pending request or revoke the lease. |
+| `admin_status` | Read mode status and the configured operation catalog; no authentication nonce. |
+| `admin_run` | Run one fixed operation ID already authorized by this session's active mode. |
+| `admin_lock` | Leave Sudo access or cancel its pending dialog and restore the previous mode. |
 
-The browser-only request identifier is not returned through the model-facing tools. Other sessions and subagents need their own approval and authentication. A new request is required after authentication failure; the same password is never automatically retried.
+The native `/permission sudo-access` command can also prepare the password dialog. The rc.1 slash-command popup still lists the native presets; the **composer selector** is the four-mode control. Sudo access is intentionally not a default for future sessions.
 
-**Lock is not rollback:** completed changes remain. Services, daemonized jobs and descendants that escape the supervised process group may outlive the lease. Command output is ordinary model-visible tool output—never configure commands that print secrets.
+**Revocation is not rollback:** completed command effects remain. Commands that launch services or escape supervision can outlive a lease. Never configure commands that print secrets; output is model-visible.
 
-## Development
+## Development and status
 
 ```sh
 npm ci --ignore-scripts
@@ -92,18 +98,13 @@ npm run check
 npm pack --dry-run --ignore-scripts
 ```
 
-Tests use fake sudo processes and unprivileged helper subprocesses. They must never request a real password or run sudo. Real PAM/sudo authentication requires an explicit operator smoke test in a trusted installation; automated tests are not evidence of successful privileged execution.
-
-## Architecture and status
+Automated tests use synthetic credentials, fake sudo processes and unprivileged Python helpers. They never request a real password or execute sudo. A real smoke test requires the human-operated flow documented in [INSTALL.md](docs/INSTALL.md).
 
 - [Architecture and protocol](docs/ARCHITECTURE.md)
-- [Installation, smoke test and rollback](docs/INSTALL.md)
 - [Security assumptions and reporting](SECURITY.md)
 - [Verification and development side effects](docs/VERIFICATION.md)
 
-Implemented: scoped lease state machine, private authentication transport, DSH tool/approval integration, conversation-header dialog, bounded Python helper, and automated tests. Not implemented: arbitrary root shells, password vault/keyring storage, remote untrusted users, Windows/macOS, polkit, a root-owned system service, transparent bash interception, MFA, or an independently audited security boundary.
-
-Next steps: operator-run real sudo/PAM smoke tests, independent security review, and a separately installed root-owned broker if stronger isolation is needed.
+Unsupported: arbitrary root shells, password vault/keyring storage, untrusted multi-user hosts, Windows/macOS, polkit, MFA, or an independently secured root-owned broker. An independent security audit and broader distribution/browser testing remain necessary.
 
 ## License
 

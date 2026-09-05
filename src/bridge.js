@@ -19,10 +19,11 @@ export class AdminBridge {
     this.sweep.unref();
   }
 
-  registerSession(sessionId, canApprove) {
-    if (!identifier(sessionId) || typeof canApprove !== 'function' || this.sessions.has(sessionId))
+  registerSession(sessionId, canApprove, onLock) {
+    if (!identifier(sessionId) || typeof canApprove !== 'function' ||
+        (onLock !== undefined && typeof onLock !== 'function') || this.sessions.has(sessionId))
       fail('invalid_session', 'Cannot attach administrator access to this session.');
-    const record = { canApprove, lease: null, cooldownUntil: 0 };
+    const record = { canApprove, onLock, lease: null, cooldownUntil: 0 };
     this.sessions.set(sessionId, record);
     return () => {
       if (this.sessions.get(sessionId) !== record) return;
@@ -117,15 +118,21 @@ export class AdminBridge {
       clearTimeout(lease.timer);
       lease.detach();
       lease.state = 'unlocked';
+      // Successful password authentication is not a failed-attempt throttle.
+      // Reentry still needs a new worker/password; failed and cancelled attempts
+      // retain their cooldown so repeated mode selection cannot bypass it.
+      record.cooldownUntil = 0;
       // Root deadline started before ready; host starts here and can never extend root authority.
       lease.deadline = this.now() + lease.manifest.ttlSeconds * 1000;
       lease.timer = setTimeout(() => { if (record.lease === lease) this.lock(sessionId); }, lease.manifest.ttlSeconds * 1000);
       lease.resolve({ state: 'unlocked', operationIds: lease.manifest.operations.map(op => op.id), ttlSeconds: lease.manifest.ttlSeconds });
       lease.resolve = lease.reject = null;
       return { state: 'unlocked' };
-    } catch {
+    } catch (error) {
       if (record.lease === lease) this.lock(sessionId);
       else lease.worker?.close();
+      if (error instanceof BridgeError && error.code === 'password_required')
+        throw new BridgeError('password_required', 'Sudo access requires password-based sudo authentication; passwordless sudo is not supported.');
       throw new BridgeError('authentication_failed', 'Authentication failed, expired, or was cancelled.');
     }
   }
@@ -146,7 +153,7 @@ export class AdminBridge {
     if (this.sessions.get(sessionId)?.lease?.requestId === requestId) this.lock(sessionId);
   }
 
-  lock(sessionId) {
+  lock(sessionId, reason = 'locked') {
     const record = this.sessions.get(sessionId);
     const lease = record?.lease;
     if (!lease) return { state: 'locked' };
@@ -154,7 +161,12 @@ export class AdminBridge {
     clearTimeout(lease.timer);
     lease.detach?.();
     lease.reject?.(new BridgeError('locked', 'Administrator request was cancelled, expired, or denied.'));
-    lease.worker?.close();
+    try { lease.worker?.close(); }
+    finally {
+      // A composition owner may restore nonprivileged session state on every
+      // termination path. Its failure can never retain or resurrect authority.
+      try { record.onLock?.({ requestId: lease.requestId, reason }); } catch {}
+    }
     return { state: 'locked' };
   }
 

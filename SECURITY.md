@@ -16,14 +16,18 @@ For a stronger boundary, use a separately installed root-owned helper with root-
 
 ## Authorization
 
-- No configured commands and no lease by default.
-- The agent first asks DSH to approve the exact one-time action **create this bounded administrator lease**, including session, selected command argv and lifetime. An ordinary command approval is not reinterpreted as a persistent grant.
-- Only `allowed-once` for that request permits opening the dedicated password dialog. Missing approval service, rejection, unavailable UI, cancellation or policy `never` fail closed.
-- A fresh browser-only request ID binds the password submission to one pending lease. It is not a model tool argument or bearer token for executing commands.
-- The lease is bound to one live DSH agent session, a frozen subset of configured operation IDs, and an absolute deadline (30–900 seconds; default maximum 300).
-- Subagents and other sessions do not inherit the lease. The root helper accepts operation IDs, not arbitrary paths, arguments, working directories or shell strings.
-- Policy is checked before requests, after authentication and before every execution. A 250 ms host sweep also revokes on policy change/expiry. The helper independently enforces its own monotonic deadline. No policy system can retroactively undo an operation that already started.
-- No per-command password or extra approval within the explicit lease. This is the authorization the human granted, not a bypass of `never` policy.
+- No configured commands, active mode or lease by default. Sudo access is never a saved session default.
+- The human selects **Sudo access** in the native composer selector. The scoped `/permission sudo-access` handler prepares a fresh password intent only; it does not grant root or change native permission knobs.
+- The dedicated dialog displays the fixed whole operation allowlist, duration and Full-access filesystem implications. Only fresh password authentication through the protected browser route can commit Full access plus the ephemeral root capability. Cancellation or failure leaves the previous mode unchanged.
+- No agent tool can initiate authentication or write the native permission preset. There is no `admin_unlock` tool in mode-based releases. A command invocation, preset value, logged intent or approval outcome alone never grants the capability.
+- A fresh browser-only request ID binds the password to one pending generation. It is absent from model-facing tool status and is not a command-execution bearer token.
+- The lease is bound to one exact live agent, the immutable configured operation set, and an absolute deadline (30–900 seconds; default maximum 300). The model supplies only an operation ID, never replacement arguments.
+- Delegated subagents cannot enter the mode. Other sessions, forks and resumed sessions never inherit its authorization.
+- The wrapper checks live identity, current native knobs and generation before password delivery, after authentication and before every execution. The host also sweeps every 250 ms; the helper independently enforces its monotonic deadline. Root authority is published only after the synchronous native permission commit succeeds.
+- Native Full access keeps its ordinary `never` approval policy. The human's explicit Sudo-mode authentication authorizes only the displayed fixed root operations; it does not make ordinary approval requests succeed under `never`. Merely being in Full access never creates a mode intent or grants root.
+- Exit, expiry, worker failure and disposal clear root before restoring native permissions. A newer external human mode selection is preserved rather than overwritten. Re-entry closes the previous helper and requires fresh authentication; failed/cancelled attempts remain rate-limited.
+- A private non-secret rollback file records the exact session creation identity, previous native knobs and event cutoffs before changing native permissions; it is durably committed before publishing the mode. Restart recovery uses it only to undo that session's interrupted transition, never as authority. Later native choices are preserved. If restoration fails, root stays revoked and the rollback file remains for recovery.
+- Journal files are user-owned `0600` inside a dedicated `0700` directory, normally `$DSH_HOME/state/admin-bridge` (or `~/.dsh/state/admin-bridge`). `stateDirectory` can explicitly select another absolute non-symlink private directory. They never contain passwords, authentication nonces, operation results or a restorable lease. Forks have distinct identities: root is never inherited, while native non-root permissions follow DSH's ordinary fork rules.
 
 ## Credential handling
 
@@ -31,7 +35,7 @@ Passwords are accepted only through an uncontrolled password field in the client
 
 JavaScript strings, browser networking, Node internals and PAM may retain transient copies in memory. Clearing the input and zeroing the explicit Buffer **is not a guarantee of cryptographic memory erasure**. Core dumps, swap, browser extensions, debugging, compromised plugins or request-body logging can expose secrets. Do not enable request-body logging at the reverse proxy, application instrumentation, or TLS termination. The plugin cannot protect against those trusted components.
 
-The plugin runs sudo with `-k` for the helper invocation rather than refreshing a global sudo timestamp. It does not periodically call `sudo -v`, retain the password, or enable passwordless sudo. An already configured `NOPASSWD` rule may allow the helper to start without a password; the unused input is discarded.
+The plugin runs sudo with `-k` for every helper invocation rather than refreshing a global timestamp. It does not call `sudo -v`, retain the password, or enable passwordless sudo. **Sudo mode rejects a ready helper unless sudo actually requested the password.** A `NOPASSWD` rule cannot make an arbitrary input look authenticated; such configurations are unsupported for this mode and the helper is closed without running configured operations.
 
 ## HTTP authentication
 
@@ -47,7 +51,7 @@ One operation runs at a time, with a bounded timeout and combined output cap. Ma
 
 **Lock is not rollback.** Filesystem effects remain. Commands that launch services, submit jobs, daemonize, or deliberately leave their process group may continue outside the supervised group. A reported interruption can have a partial or unknown outcome; inspect system state before retrying. Commands must not be designed to escape supervision.
 
-Command output goes back to the agent and may be persisted in ordinary tool transcripts. Do not configure commands that print passwords, private keys, tokens or other sensitive material. Command argv and labels are public to the authenticated UI and approval log: never put secrets there.
+Command output goes back to the agent and may be persisted in ordinary tool transcripts. Do not configure commands that print passwords, private keys, tokens or other sensitive material. Command argv and labels are public to the authenticated UI and agent status: never put secrets there.
 
 ## Reporting
 
