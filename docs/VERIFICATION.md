@@ -28,11 +28,11 @@ Local combined validation passed:
 
 GitHub Actions CI is **not enabled**. The current GitHub OAuth login lacks the `workflow` scope, and GitHub rejected a push containing an Actions workflow. The optional workflow was removed from the unpublished commit rather than requesting broader credentials or bypassing that restriction. Local tests and the checked-in lockfile remain reproducible; CI can be added later by an appropriately authorized human.
 
-## Not verified / operator gate
+## Validation limits
 
-**No real sudo/PAM authentication or privileged command was executed during development. No password was requested.** Successful unit/protocol tests are not proof that a particular host's sudo/PAM configuration works. MFA, custom PAM dialogs, `requiretty` and sudo I/O-policy variations need separate consideration. Run the explicit human-operated `/usr/bin/id -u` smoke test in [INSTALL.md](INSTALL.md) before using meaningful privileged operations.
+The initial automated development run did not request passwords or execute sudo. A subsequent human-operated live test successfully exercised the Admin UI flow, two real root commands under one lease, and revocation; see below. This validates one host configuration, not every distribution or PAM policy. MFA, custom PAM dialogs, `requiretty` and sudo I/O-policy variations remain unsupported or unverified. Run the explicit operator smoke test in [INSTALL.md](INSTALL.md) before using meaningful privileged operations on another host.
 
-The initial development run did not install the plugin. A subsequent human-authorized installation successfully loaded it into an existing DSH Web host; see the live-installation evidence below. A visible browser/password flow and privileged end-to-end result are still not claimed. Browser UI compatibility has been checked against the targeted DSH module/slot contracts and component tests, not a screenshot of an installed plugin.
+No independent screenshot or browser automation capture was taken during password entry. The human confirmed the Admin button was visible and completed the dedicated authentication flow; the agent observed only lease status and command results, never the password.
 
 ## Side effects, backups and rollback
 
@@ -40,11 +40,11 @@ Development created this public GitHub repository, enabled private vulnerability
 
 During initial development, no changes were made to sudoers, PAM, system packages, services, permissions, DSH runtime files, live profiles, credentials or permission presets. No replacement Web server was started. Automated HTTP fixtures bind ephemeral loopback ports and shut down after their tests; fake browser-auth signing material exists only in test memory. Helper subprocesses run at the invoking test user's privileges and are cleaned up.
 
-There was no pre-existing project to back up, and no system rollback is needed for development. A future operator installation changes the selected DSH profile and requires a private profile backup, a restart/refresh of the existing GUI, and the documented removal procedure. Removing the plugin cannot undo effects of commands a user later authorizes.
+Installation later changed the selected DSH profile, with a private profile backup and documented rollback. The human explicitly changed the current session to Workspace Write, enabling native approval prompts, then later restored Full access after the test (approval policy returned to `never`). The agent did not change either permission setting. The real privileged operations were only two executions of `/usr/bin/id -u`; they reported the effective UID and made no system changes. The test ended with administrator access locked. Removing the plugin cannot undo effects of any future commands a user authorizes.
 
-## First live installation — 2026-09-05
+## First live installation and sudo test — 2026-09-05
 
-The human subsequently requested installation and testing. Source commit `9193a501666fbd05fec20a4ba41054bd2755a1f4` was installed into the existing Web profile using the official plugin manager with lifecycle scripts disabled. Profile-only backups were taken privately; no credentials were copied. The dependency/lockfile delta added only this package, and the installed executable sources matched the reviewed checkout byte-for-byte. Peer imports resolved to the existing exact-version runtime packages without adding duplicate core packages.
+The human requested installation and testing. Source commit `9193a501666fbd05fec20a4ba41054bd2755a1f4` was installed into the existing Web profile using the official plugin manager with lifecycle scripts disabled. Profile-only backups were taken privately; no credentials were copied. The dependency/lockfile delta added only this package, and the installed executable sources matched the reviewed checkout byte-for-byte. Peer imports resolved to the existing exact-version runtime packages without adding duplicate core packages.
 
 The DSH prerelease caches bundle layers and command-line overlays at startup. Its profile-patch watcher supports live additions, so the deployment used a **permanent** profile override disabling the default `admin-bridge` bundle row and inserting a distinct `admin-bridge-live` row with the full configuration. This avoids restarting the process hosting the active agent. The actual patch composer and client graph reconciliation methods were tested with detached before/after-restart entry lists: both have exactly one enabled host instance and one browser module. An ordinary same-ID insert is **not** safe because it duplicates the bundle row after restart. The simpler canonical restart-based installation remains documented in [INSTALL.md](INSTALL.md).
 
@@ -53,14 +53,20 @@ Live results:
 - The existing service stayed active with the same PID; no replacement server or core runtime patch was used.
 - Only `whoami-root` = `/usr/bin/id -u` was configured, with a five-second command timeout and a 60-second maximum lease.
 - The actual route changed from the unloaded fallback's HTTP 405 to the plugin's HTTP 401 JSON browser-authentication rejection, with `no-store` and other defensive headers.
-- The existing agent successfully called `admin_status`: disabled approval policy, exact one-operation catalog, TTL limit 60. `admin_run(whoami-root)` returned `policy_denied`; `admin_lock` returned locked. These are real live-host tool calls, not mocks.
+- With native approval policy disabled, actual `admin_status` reported disabled and the exact catalog; `admin_run(whoami-root)` returned `policy_denied`.
+- The human refreshed the existing GUI, confirmed the Admin button, and used this conversation's `/permission` picker to switch to **Workspace Write**. The runtime confirmed policy `never` changed to `ask`; `admin_status` then reported locked. Changing only the Settings default would not change an existing session.
+- `admin_unlock` requested one 60-second lease for `whoami-root`. The human approved the native request and completed the Admin authentication dialog. The tool returned `unlocked` for exactly that operation ID.
+- Two successive actual `admin_run` calls each returned `exitCode: 0`, `stdout: "0\n"`, empty stderr, `truncated: false` and `timedOut: false`. No second unlock/authentication was requested.
+- `admin_lock` returned locked. A subsequent `admin_run` was rejected with code `locked` and message `Authenticate an approved administrator request first.`
 - All 121 JavaScript and 22 unprivileged Python tests passed again before activation.
 
-The browser automation extension was disconnected, so a human refresh and explicit approval-enabled test session are still needed to verify the visible dialog and real sudo/PAM authentication. No approval policy was changed and no sudo command was executed. Rollback of this live composition must remove **both** the original-row disable and the distinct live insert, remove the package through DSH, then restart the existing service at a safe turn boundary and refresh the page.
+The browser automation extension was disconnected, so GUI interaction was performed by the human rather than captured by automation. No password appeared in agent arguments, results or documentation. Natural expiry and multi-session isolation are covered by automated tests but were not separately repeated with additional real authentications in this smoke test.
+
+Rollback of this live composition must remove **both** the original-row disable and the distinct live insert, remove the package through DSH, then restart the existing service at a safe turn boundary and refresh the page.
 
 ## Remaining work
 
 - Enable GitHub Actions with appropriate repository authorization and exercise Node 22/24 on supported distributions.
-- Human-run real sudo/PAM and installed-browser smoke tests on supported distributions.
+- Broader distribution/PAM/browser testing, including additional operator-run expiry and cross-session checks.
 - Independent security audit before recommending production use.
 - A separately installed root-owned broker/policy for deployments needing isolation from same-user processes or restricted-sudo accounts.
