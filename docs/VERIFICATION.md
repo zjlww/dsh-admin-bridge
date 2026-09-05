@@ -84,7 +84,13 @@ Integration review found and fixed two rc.1 compatibility issues before deployme
 
 The only core change is the explicit two-artifact composer compatibility rebuild documented in `compat/README.md`, with an unchanged native fallback. There is no new sandbox enum, global default, generic renderer patch, unrestricted root shell, or replacement Web server. The plugin explicitly refreshes already-built client artifacts in DSH's revision graph during live activation; this is not a source watcher or a promise of refresh-free browser updates.
 
-**The successful real sudo test above belongs to 0.1.x, not this new mode flow.** Live deployment, fourth-option/icon visibility and a new human-operated password test must be verified separately; no screenshot or password capture is needed.
+### New mode: human-operated live test passed — 2026-09-05
+
+The new flow was separately installed and tested from commit `8f09d73e5e6c007771039c9b9ef6a544017155eb`. The official manager updated the pinned profile package with lifecycle scripts disabled; a complete fresh versioned physical package prevented reuse of old ESM imports. Source bytes and all twelve shared runtime peer resolutions were verified. The guarded composer rebuild reported both artifacts patched, and the existing process stayed active with the same PID; the original bundle row remains disabled beside the single live row.
+
+Before authentication, `admin_status` reported `modeActive:false` under ordinary Full access (`never` approval policy); execution was rejected. The human was asked to refresh the existing page and use the fourth-mode password dialog, then reported **Done**. Status confirmed `modeActive:true`, the exact one-operation allowlist, TTL 60 and previous preset Full access. Two real `admin_run(whoami-root)` calls each returned exit code 0 and stdout `0\n`, with empty stderr and no timeout/truncation, under that one authentication. `admin_lock` returned `modeActive:false`; a subsequent operation was rejected. The previous Full access mode was restored, and the private rollback directory was empty afterward.
+
+The existing GUI and unauthenticated bridge API retained HTTP 401 authentication fences. No password was supplied to the agent or captured in browser automation, screenshots or request exports. This was a human-operated GUI test, not independent visual automation. Natural expiry, repeat-entry password requirements and isolation retain automated coverage but were not additionally exercised with real password submissions in this run. No sudoers, PAM, system package, root service or routing changes were made; the two privileged commands only reported their UID.
 
 ## Remaining work
 
