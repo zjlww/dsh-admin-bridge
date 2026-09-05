@@ -72,7 +72,7 @@ Current automated evidence, on the same Node/Python versions above:
 
 | Check | Result |
 |---|---|
-| `npm test` — JavaScript | **215 passed**, no failures/skips |
+| `npm test` — JavaScript | **216 passed**, no failures/skips |
 | `npm test` — unprivileged Python | **22 passed**, no failures/skips |
 | `npm run check`, `git diff --check` | Passed |
 | `npm pack --dry-run --ignore-scripts` | 21 source/documentation files; no dependencies or secrets |

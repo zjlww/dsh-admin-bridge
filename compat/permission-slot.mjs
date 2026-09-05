@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /** Explicit, version-guarded compatibility patch; importing this module never writes. */
-import { readFile, writeFile, lstat, rename, unlink } from 'node:fs/promises';
+import { readFile, writeFile, lstat, rename, unlink, realpath } from 'node:fs/promises';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { createHash } from 'node:crypto';
@@ -101,7 +101,10 @@ export async function run(runtime, action = 'check') {
   })) };
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href) {
+// Node canonicalizes the imported module URL, but argv may retain symlinked
+// checkout paths. Resolve both identities so direct CLI execution cannot no-op.
+const entryPath = process.argv[1] ? await realpath(process.argv[1]).catch(() => undefined) : undefined;
+if (entryPath && import.meta.url === pathToFileURL(entryPath).href) {
   try {
     const args = process.argv.slice(2);
     if (args.length !== 3 || !['--check', '--apply', '--revert'].includes(args[0]) || args[1] !== '--runtime')

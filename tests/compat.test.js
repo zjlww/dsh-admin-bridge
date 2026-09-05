@@ -1,6 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, mkdir, readFile, writeFile, rm } from 'node:fs/promises';
+import { mkdtemp, mkdir, readFile, writeFile, rm, symlink } from 'node:fs/promises';
+import { execFileSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import os from 'node:os';
 import { patches, transform, run, PACKAGE, VERSION, BACKUP_SUFFIX } from '../compat/permission-slot.mjs';
@@ -62,6 +64,15 @@ test('compat fails closed for another version and preflights all targets', async
   await assert.rejects(run(runtime, 'apply'), /anchor/);
   assert.equal(await readFile(path.join(root, patches[0].file), 'utf8'), fixture(patches[0]));
   await assert.rejects(readFile(path.join(root, patches[0].file) + BACKUP_SUFFIX), { code: 'ENOENT' });
+});
+
+test('direct CLI invocation through a symlinked checkout executes instead of silently doing nothing', async t => {
+  const { runtime } = await installation(t);
+  const cli = path.join(runtime, 'linked-cli.mjs');
+  await symlink(fileURLToPath(new URL('../compat/permission-slot.mjs', import.meta.url)), cli);
+  const output = execFileSync(process.execPath, [cli, '--apply', '--runtime', runtime], { encoding: 'utf8' });
+  assert.equal(JSON.parse(output).files[0].after, 'patched');
+  assert.equal((await run(runtime)).files[0].after, 'patched');
 });
 
 test('compat refuses a mismatched backup rather than overwriting it', async t => {
