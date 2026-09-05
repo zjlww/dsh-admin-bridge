@@ -1,0 +1,12 @@
+# Host-only bundle row. The host attaches a child scope to each live agent;
+# a top-level tool row would incorrectly register tools in the global layer.
+- insert:
+    - id: admin-bridge
+      name: dsh-admin-bridge
+      config:
+        # Operator-owned exact argv allowlist. Empty means no privileged command.
+        operations: []
+        maxTtlSeconds: 300
+        # Empty allows only same-origin loopback HTTP from a loopback peer.
+        # Remote use requires explicitly named HTTPS origins plus DSH host trust.
+        allowedOrigins: []

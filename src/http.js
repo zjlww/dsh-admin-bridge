@@ -92,6 +92,10 @@ export function createHandler({ bridge, requestRejection, allowedOrigins = [] })
       let payload = await body(req);
       exactKeys(payload, endpoint === 'authenticate' ? ['sessionId', 'requestId', 'password'] : ['sessionId']);
       if (!identifier(payload.sessionId)) fail('invalid_request', 'Invalid session identifier.');
+      if (res.destroyed) {
+        if (endpoint === 'authenticate') bridge.cancelRequest(payload.sessionId, payload.requestId);
+        return;
+      }
       let value;
       if (endpoint === 'status') value = bridge.describe(payload.sessionId);
       else if (endpoint === 'lock') value = bridge.lock(payload.sessionId);

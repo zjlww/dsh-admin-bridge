@@ -31,8 +31,6 @@ window.__ModuleLoader__.load({
       const activeRequest = useRef(null);
       const generation = useRef(0);
       const seenRequest = useRef(null);
-      const latestStatus = useRef(status);
-      latestStatus.current = status;
 
       useEffect(() => {
         const current = ++generation.current;

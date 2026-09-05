@@ -37,7 +37,7 @@ The plugin runs sudo with `-k` for the helper invocation rather than refreshing 
 
 Every route calls DSH's `connection.requestRejection` for its cookie authentication and Host/Origin fence. It also requires POST, an explicit exact Origin, a custom header, JSON content type, bounded request bodies and no content encoding. HTTPS origins must be explicitly configured and arrive over a TLS socket or a loopback connection from a trusted local HTTPS reverse proxy. Forwarded headers do not grant trust. HTTP is accepted only for exact loopback authorities on a loopback socket; arbitrary remote plaintext origins are never accepted.
 
-No password is sent via the generic DSH tool or approval transport. Errors are caught and reduced to fixed safe messages before reaching the Harness server logger. Responses are `no-store`; there is no CORS allowance, query-string credential transport, or browser storage. Origin checks do not establish separate user identities: DSH is treated as a single trusted-user host.
+No password is sent via the generic DSH tool or approval transport. Errors are caught and reduced to fixed safe messages before reaching the Harness server logger. Responses are `no-store`; there is no CORS allowance, query-string credential transport, or browser storage. Origin checks do not establish separate user identities: DSH is treated as a single trusted-user host. In the targeted DSH prerelease, the native browser cookie is HttpOnly and SameSite=Strict but is not marked Secure; the plugin does not repair that upstream behavior. Restrict network exposure to the intended HTTPS entry point and do not make the authenticated hostname available over untrusted plaintext HTTP.
 
 ## Commands and revocation
 
@@ -51,4 +51,4 @@ Command output goes back to the agent and may be persisted in ordinary tool tran
 
 ## Reporting
 
-Do not file passwords, tokens, sensitive command output or exploit details in a public issue. Use GitHub's private vulnerability reporting when available, or contact the repository owner privately to coordinate disclosure. No independent security audit or production-hardening claim is made.
+Do not file passwords, tokens, sensitive command output or exploit details in a public issue. [Report a vulnerability privately through GitHub](https://github.com/zjlww/dsh-admin-bridge/security/advisories/new); private vulnerability reporting is enabled for this repository. No independent security audit or production-hardening claim is made.

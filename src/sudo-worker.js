@@ -10,8 +10,9 @@ const safeEnvironment = Object.freeze({ PATH: '/usr/sbin:/usr/bin:/sbin:/bin', L
 
 // Each worker owns private pipes. No shell, PTY, timestamp keepalive, or secret in argv/env.
 export class SudoWorker {
-  constructor(manifest, { spawnProcess = spawn, authMs = AUTH_MS } = {}) {
+  constructor(manifest, { spawnProcess = spawn, authMs = AUTH_MS, canProceed = () => true } = {}) {
     this.manifest = manifest;
+    this.canProceed = () => { try { return canProceed() === true; } catch { return false; } };
     this.spawnProcess = spawnProcess;
     this.authMs = authMs;
     this.child = null;
@@ -23,6 +24,7 @@ export class SudoWorker {
 
   async authenticate(password) {
     if (this.child || this.closed) fail('closed', 'Administrator worker is unavailable.');
+    if (!this.canProceed()) fail('policy_denied', 'Administrator authorization is no longer available.');
     if (typeof password !== 'string' || Buffer.byteLength(password) > 4096 || /[\r\n\0]/.test(password))
       fail('invalid_request', 'Invalid password input.');
     let secret = Buffer.from(password + '\n', 'utf8');
@@ -72,12 +74,12 @@ export class SudoWorker {
       });
       child.stderr.on('data', chunk => {
         // Never forward PAM/sudo diagnostics: they are not a public error channel.
-        if (this.ready) return;
+        if (this.ready || this.closed) return;
         stderr += chunk.toString('utf8');
         if (stderr.length > 8192) { this.close(); return; }
         const at = stderr.indexOf(prompt);
         if (at < 0) return;
-        if (sent) { this.close(); return; } // One attempt, no cached password retries.
+        if (sent || !this.canProceed()) { this.close(); return; } // One attempt; recheck before password delivery.
         sent = true;
         stderr = stderr.slice(at + prompt.length);
         child.stdin.write(secret, () => clearSecret());

@@ -8,7 +8,7 @@ export class AdminBridge {
     this.operations = validateOperations(operations);
     if (!integer(maxTtlSeconds, 30, 900)) fail('invalid_config', 'Maximum lease duration must be 30–900 seconds.');
     this.maxTtlSeconds = maxTtlSeconds;
-    this.workerFactory = dependencies.workerFactory ?? (manifest => new SudoWorker(manifest));
+    this.workerFactory = dependencies.workerFactory ?? ((manifest, canProceed) => new SudoWorker(manifest, { canProceed }));
     this.now = dependencies.now ?? (() => performance.now());
     this.requestTimeoutMs = dependencies.requestTimeoutMs ?? 90_000;
     this.sessions = new Map();
@@ -105,7 +105,8 @@ export class AdminBridge {
     lease.state = 'authenticating'; // Claim once before the first asynchronous boundary.
     record.cooldownUntil = this.now() + 10_000;
     try {
-      lease.worker = this.workerFactory(lease.manifest);
+      lease.worker = this.workerFactory(lease.manifest, () =>
+        record.lease === lease && this.allowed(record) && this.now() < lease.deadline);
       lease.worker.onClose = () => { if (record.lease === lease) this.lock(sessionId); };
       const authentication = lease.worker.authenticate(password);
       password = undefined;

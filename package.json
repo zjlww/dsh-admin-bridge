@@ -1,0 +1,64 @@
+{
+  "name": "dsh-admin-bridge",
+  "version": "0.1.0-alpha.1",
+  "description": "Session-scoped, short-lived administrator operation leases for DeepSeek Harness",
+  "type": "module",
+  "main": "./src/index.js",
+  "exports": {
+    ".": "./src/index.js",
+    "./session": "./src/session.js",
+    "./client": "./client/index.js",
+    "./package.json": "./package.json",
+    "./cordis.patch.yml": "./cordis.patch.yml"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "test": "node --test tests/*.test.js && python3 -B -m unittest discover -s tests -p 'test_*.py' -v",
+    "test:js": "node --test tests/*.test.js",
+    "test:helper": "python3 -B -m unittest discover -s tests -p 'test_*.py' -v",
+    "check": "node scripts/check.mjs"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "inject": [
+        "@deepseek-ai/dsh-client-ui-conversation",
+        "@deepseek-ai/dsh-client-connection"
+      ],
+      "immediately": false
+    }
+  },
+  "peerDependencies": {
+    "@deepseek-ai/cordis": "4.0.2",
+    "@deepseek-ai/schemastery": "3.18.2",
+    "@deepseek-ai/dsh-agent": "0.1.2-rc.1",
+    "@deepseek-ai/dsh-tools": "0.1.2-rc.1",
+    "@deepseek-ai/dsh-scope": "0.1.2-rc.1",
+    "@deepseek-ai/dsh-user-approval": "0.1.2-rc.1",
+    "@deepseek-ai/dsh-host-webserver": "0.1.2-rc.1",
+    "@deepseek-ai/dsh-client-connection": "0.1.2-rc.1"
+  },
+  "files": [
+    "src",
+    "client",
+    "helper/runner.py",
+    "cordis.patch.yml",
+    "README.md",
+    "SECURITY.md",
+    "docs",
+    "LICENSE"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/zjlww/dsh-admin-bridge.git"
+  },
+  "homepage": "https://github.com/zjlww/dsh-admin-bridge#readme",
+  "bugs": { "url": "https://github.com/zjlww/dsh-admin-bridge/issues" },
+  "keywords": ["dsh", "deepseek-harness", "plugin", "sudo", "linux"],
+  "license": "MIT"
+}

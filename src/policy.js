@@ -18,11 +18,12 @@ export function validateOperations(value) {
   return Object.freeze(value.map(op => {
     exactKeys(op, ['id', 'label', 'executable', 'args', 'timeoutSeconds']);
     if (!identifier(op.id) || seen.has(op.id) || typeof op.label !== 'string' ||
-        op.label.length < 1 || op.label.length > 120 || /[\x00-\x1f\x7f]/.test(op.label) ||
-        typeof op.executable !== 'string' || !op.executable.startsWith('/') ||
-        op.executable.length > 1024 || /[\x00-\x20\x7f]/.test(op.executable) ||
+        op.label.length < 1 || op.label.length > 120 || !op.label.isWellFormed() || /[\x00-\x1f\x7f]/.test(op.label) ||
+        typeof op.executable !== 'string' || !op.executable.startsWith('/') || !op.executable.isWellFormed() ||
+        op.executable.length > 1024 || /[\s\x00-\x1f\x7f]/.test(op.executable) ||
+        op.executable.split('/').slice(1).some(part => ['', '.', '..'].includes(part)) ||
         !Array.isArray(op.args) || op.args.length > 32 ||
-        op.args.some(arg => typeof arg !== 'string' || arg.length > 1024 || /[\x00-\x1f\x7f]/.test(arg)) ||
+        op.args.some(arg => typeof arg !== 'string' || arg.length > 1024 || !arg.isWellFormed() || /[\x00-\x1f\x7f]/.test(arg)) ||
         !integer(op.timeoutSeconds, 1, 120)) fail('invalid_config', 'Invalid operation definition.');
     seen.add(op.id);
     return Object.freeze({ ...op, args: Object.freeze([...op.args]) });
