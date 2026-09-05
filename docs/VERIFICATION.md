@@ -32,15 +32,31 @@ GitHub Actions CI is **not enabled**. The current GitHub OAuth login lacks the `
 
 **No real sudo/PAM authentication or privileged command was executed during development. No password was requested.** Successful unit/protocol tests are not proof that a particular host's sudo/PAM configuration works. MFA, custom PAM dialogs, `requiretty` and sudo I/O-policy variations need separate consideration. Run the explicit human-operated `/usr/bin/id -u` smoke test in [INSTALL.md](INSTALL.md) before using meaningful privileged operations.
 
-The plugin was **not installed into the existing DSH Web profile**, and that process was not restarted or modified. Therefore no live-GUI refresh, password dialog or privileged end-to-end result is claimed. Browser UI compatibility is checked against the targeted DSH module/slot contracts and component tests, not a screenshot of an installed plugin.
+The initial development run did not install the plugin. A subsequent human-authorized installation successfully loaded it into an existing DSH Web host; see the live-installation evidence below. A visible browser/password flow and privileged end-to-end result are still not claimed. Browser UI compatibility has been checked against the targeted DSH module/slot contracts and component tests, not a screenshot of an installed plugin.
 
 ## Side effects, backups and rollback
 
 Development created this public GitHub repository, enabled private vulnerability reporting, and pushed source/documentation/tests. It created a separate local project checkout and project-local `node_modules`/lockfile; dependencies and generated artifacts are excluded from Git. `npm install --ignore-scripts` reported zero dependency vulnerabilities when the initial lockfile was created.
 
-No changes were made to sudoers, PAM, system packages, services, permissions, DSH runtime files, live profiles, credentials or permission presets. No replacement Web server was started. Automated HTTP fixtures bind ephemeral loopback ports and shut down after their tests; fake browser-auth signing material exists only in test memory. Helper subprocesses run at the invoking test user's privileges and are cleaned up.
+During initial development, no changes were made to sudoers, PAM, system packages, services, permissions, DSH runtime files, live profiles, credentials or permission presets. No replacement Web server was started. Automated HTTP fixtures bind ephemeral loopback ports and shut down after their tests; fake browser-auth signing material exists only in test memory. Helper subprocesses run at the invoking test user's privileges and are cleaned up.
 
 There was no pre-existing project to back up, and no system rollback is needed for development. A future operator installation changes the selected DSH profile and requires a private profile backup, a restart/refresh of the existing GUI, and the documented removal procedure. Removing the plugin cannot undo effects of commands a user later authorizes.
+
+## First live installation — 2026-09-05
+
+The human subsequently requested installation and testing. Source commit `9193a501666fbd05fec20a4ba41054bd2755a1f4` was installed into the existing Web profile using the official plugin manager with lifecycle scripts disabled. Profile-only backups were taken privately; no credentials were copied. The dependency/lockfile delta added only this package, and the installed executable sources matched the reviewed checkout byte-for-byte. Peer imports resolved to the existing exact-version runtime packages without adding duplicate core packages.
+
+The DSH prerelease caches bundle layers and command-line overlays at startup. Its profile-patch watcher supports live additions, so the deployment used a **permanent** profile override disabling the default `admin-bridge` bundle row and inserting a distinct `admin-bridge-live` row with the full configuration. This avoids restarting the process hosting the active agent. The actual patch composer and client graph reconciliation methods were tested with detached before/after-restart entry lists: both have exactly one enabled host instance and one browser module. An ordinary same-ID insert is **not** safe because it duplicates the bundle row after restart. The simpler canonical restart-based installation remains documented in [INSTALL.md](INSTALL.md).
+
+Live results:
+
+- The existing service stayed active with the same PID; no replacement server or core runtime patch was used.
+- Only `whoami-root` = `/usr/bin/id -u` was configured, with a five-second command timeout and a 60-second maximum lease.
+- The actual route changed from the unloaded fallback's HTTP 405 to the plugin's HTTP 401 JSON browser-authentication rejection, with `no-store` and other defensive headers.
+- The existing agent successfully called `admin_status`: disabled approval policy, exact one-operation catalog, TTL limit 60. `admin_run(whoami-root)` returned `policy_denied`; `admin_lock` returned locked. These are real live-host tool calls, not mocks.
+- All 121 JavaScript and 22 unprivileged Python tests passed again before activation.
+
+The browser automation extension was disconnected, so a human refresh and explicit approval-enabled test session are still needed to verify the visible dialog and real sudo/PAM authentication. No approval policy was changed and no sudo command was executed. Rollback of this live composition must remove **both** the original-row disable and the distinct live insert, remove the package through DSH, then restart the existing service at a safe turn boundary and refresh the page.
 
 ## Remaining work
 
