@@ -2,7 +2,7 @@
 
 **Sudo access: a fourth permission mode. Agents can request it; only fresh human password authentication grants temporary root access.**
 
-A public, Linux-only plugin for [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness), targeting **DSH 0.1.2-rc.1**. Version `0.3.0-alpha.1` adds arbitrary root commands and agent-requested GUI authentication to the fourth-mode flow.
+A public, Linux-only plugin for [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness), targeting **DSH 0.1.2-rc.1**. Version `0.3.0-alpha.2` keeps inactive native modes quiet when a network break prevents the background Sudo status check; `0.3.0-alpha.1` added arbitrary root commands and agent-requested GUI authentication to the fourth-mode flow.
 
 > **Experimental and dangerous.** By default, authentication authorizes **all root Bash commands**, not just configured operations. This is not a sandbox or an audited privilege boundary. Read [SECURITY.md](SECURITY.md). The user-owned helper requires an account already permitted to run it through sudo; never grant passwordless root Python to enable it.
 

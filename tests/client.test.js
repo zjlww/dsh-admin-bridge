@@ -403,6 +403,27 @@ test('only modeActive and unexpired deadline control Sudo label, not legacy stat
   await app.unmount();
 });
 
+test('status polling network loss stays silent in an ordinary native mode', async () => {
+  const app = mount(); await app.flush();
+  app.methods.status = async () => { throw new Error('synthetic network loss'); };
+  await app.advance();
+  assert.equal(app.label, 'Workspace Write');
+  assert.equal(app.alerts, '');
+  await app.unmount();
+});
+
+test('status polling network loss warns during Sudo access and recovery clears the warning', async () => {
+  const app = mount({ status: active() }); await app.flush();
+  app.methods.status = async () => { throw new Error('synthetic network loss'); };
+  await app.advance();
+  assert.match(app.alerts, /Could not check Sudo access/);
+  delete app.methods.status;
+  await app.advance();
+  assert.equal(app.alerts, '');
+  assert.match(app.label, /^Sudo access/);
+  await app.unmount();
+});
+
 test('polling is bounded, abortable, and unmount cancels pending intent without leaked timers', async () => {
   const app = mount({ status: pending('departure-nonce') }); await app.flush();
   const dom = app.input.props.ref.current;

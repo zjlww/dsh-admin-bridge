@@ -10,6 +10,7 @@ window.__ModuleLoader__.load({
     const FULL_ACCESS = 'danger-full-access';
     const SUDO = 'sudo-access';
     const emptyStatus = () => ({ state: 'unavailable', modeActive: false, operations: [] });
+    const statusCheckError = 'Could not check Sudo access. The host still enforces its deadline.';
     const buttonStyle = { padding: '6px 10px', border: '1px solid GrayText', borderRadius: 6, cursor: 'pointer' };
     const ascii = value => JSON.stringify(value).replace(/[\u007f-\uffff]/g, char => '\\u' + char.charCodeAt(0).toString(16).padStart(4, '0'));
     // The three native rc.1 glyphs are intentionally byte-for-byte identical path data.
@@ -80,6 +81,7 @@ window.__ModuleLoader__.load({
       const [dialogOpen, setDialogOpen] = useState(false);
       const [busy, setBusy] = useState(false);
       const [error, setError] = useState('');
+      const [statusError, setStatusError] = useState('');
       const [pick, setPick] = useState(null);
       const [confirmation, setConfirmation] = useState(null);
       const [acknowledged, setAcknowledged] = useState(false);
@@ -92,7 +94,7 @@ window.__ModuleLoader__.load({
       function accept(life, next) {
         life.status = next;
         life.pending = !next.modeActive && (next.state === 'pending' || next.state === 'authenticating');
-        setStatus(next); setNow(Date.now());
+        setStatus(next); setStatusError(''); setNow(Date.now());
         if (next.state === 'pending' && typeof next.requestId === 'string' && !life.dismissed.has(next.requestId)) {
           if (life.requestId !== next.requestId) { clearPassword(); setError(''); }
           life.requestId = next.requestId;
@@ -120,7 +122,7 @@ window.__ModuleLoader__.load({
           action: null, controllers: new Set(), timers: new Set(), dismissed: new Set(), status: emptyStatus() };
         scope.current = life;
         setStatus(emptyStatus()); setMenuOpen(false); setDialogOpen(false); setBusy(false);
-        setError(''); setPick(null); setConfirmation(null); setAcknowledged(false); clearPassword();
+        setError(''); setStatusError(''); setPick(null); setConfirmation(null); setAcknowledged(false); clearPassword();
         let pollTimer;
         async function refresh() {
           if (!life.alive || !sessionId) return;
@@ -131,8 +133,10 @@ window.__ModuleLoader__.load({
               if (valid(life, version)) accept(life, next);
             } catch {
               if (valid(life, version)) {
-                setStatus(emptyStatus()); setDialogOpen(false); clearPassword();
-                setError('Could not check Sudo access. The host still enforces its deadline.');
+                if (life.status.modeActive || life.pending || life.status.restorationPending) {
+                  setStatus(emptyStatus()); setDialogOpen(false); clearPassword();
+                  setStatusError(statusCheckError);
+                } else setStatusError('');
               }
             }
           }
@@ -300,6 +304,7 @@ window.__ModuleLoader__.load({
           acknowledgeLabel: 'I understand the risks and want to continue', cancelLabel: 'Cancel', closeLabel: 'Close', confirmLabel: 'Enable Full access',
           acknowledged, disabled: locked, onAcknowledgedChange: setAcknowledged, onCancel: closeConfirmation, onConfirm: confirmFullAccess }),
         ownStatus.restorationPending ? h('p', { role: 'alert' }, 'Sudo access has ended, but the previous filesystem mode could not be restored. Choose a normal access mode before trying Sudo access again.') : null,
+        statusError ? h('p', { role: 'alert', style: { color: 'crimson' } }, statusError) : null,
         error ? h('p', { role: 'alert', style: { color: 'crimson' } }, error) : null,
         h('dialog', { ref: dialog, 'aria-label': 'Sudo access',
           style: { maxWidth: 620, width: 'min(90vw, 620px)', maxHeight: '85vh', padding: 24, borderRadius: 12,

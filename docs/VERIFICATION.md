@@ -1,5 +1,11 @@
 # Verification and development side effects
 
+## 0.3.0-alpha.2: inactive network-loss warning fix
+
+The client continues polling so an agent-requested Sudo dialog can appear, but a failed status request no longer adds a Sudo warning to the composer while the last known state is an ordinary inactive native mode. A failure remains visible when Sudo access is active, authentication is pending, or native-mode restoration needs attention. Status-poll warnings are separate from action/authentication errors and clear after the next successful status response.
+
+Synthetic client regressions cover both the inactive silent case and the active warning/recovery case. Release validation passed with **230 JavaScript tests and 26 unprivileged Python tests**, plus syntax checks, whitespace checks, and source-only package inspection. No password, sudo process, root command, live configuration, or service restart is involved in those tests.
+
 ## 0.3.0-alpha.1: new scope and verification status
 
 The new release adds `allowAllCommands` (default **true**) and `admin_request({})`. The request opens the GUI authentication dialog, but only fresh human password authentication grants Sudo access. Requests are idempotent while pending or active and do not renew a lease. Delegated agents cannot request or inherit it; passwords must never pass through chat or tools. Native approvals remain unchanged.
