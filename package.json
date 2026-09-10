@@ -6,7 +6,6 @@
   "main": "./src/index.js",
   "exports": {
     ".": "./src/index.js",
-    "./session": "./src/session.js",
     "./client": "./client/index.js",
     "./package.json": "./package.json",
     "./cordis.patch.yml": "./cordis.patch.yml"

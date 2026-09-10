@@ -112,7 +112,7 @@ export function nativeCallbacks(ctx, agent, journal = ctx.get('adminBridgeJourna
       return sameKnobs(current, previous) && current.preset === previous.preset;
     },
     isFull: () => sameKnobs(capture(), { sandbox: 'danger-full-access', approval: 'never' }),
-    isLive: () => ctx.agent === agent && ctx.get('agents')?.get(session.id) === agent,
+    isLive: () => ctx.get('agents')?.get(session.id) === agent,
     isDelegated: () => !session.header || session.header.origin === 'subagent' ||
       (session.header.delegationDepth ?? 0) > 0,
     nativeNames: presets.names,
@@ -134,9 +134,16 @@ export function nativeCallbacks(ctx, agent, journal = ctx.get('adminBridgeJourna
   return callbacks;
 }
 
+/** Session id of a candidate agent without assuming an exact live object. */
+const session_id = candidate => candidate?.session?.id;
+
 /** Human-authenticated mode with agent request/read/run/revoke tools. */
 export function mountSession(ctx, agent, mode, journal = ctx.get('adminBridgeJournal')) {
-  if (!agent || ctx.agent !== agent) fail('invalid_session', 'An exact live agent scope is required.');
+  // DSH 0.1.5-rc.1 removed the `agent` context accessor, so liveness is read from
+  // the `agents` registry instead of `ctx.agent`. `agent/created` is announced only
+  // after the registry entry exists, so this is the same exact-identity check.
+  if (!agent || ctx.get('agents')?.get(session_id(agent)) !== agent)
+    fail('invalid_session', 'An exact live agent scope is required.');
   const session = agent.session;
   const sessionId = session.id;
   const tools = ctx.get('tools');
@@ -222,6 +229,8 @@ export function mountSession(ctx, agent, mode, journal = ctx.get('adminBridgeJou
   }, 'admin-bridge: password-gated mode, native selector command, and scoped tools');
 }
 
-export const inject = ['tools', 'commands', 'permissionPresets', 'sandboxPolicy', 'approval',
-  'adminBridge', 'adminBridgeJournal'];
-export function apply(ctx) { return mountSession(ctx, ctx.agent, ctx.adminBridge); }
+// The former per-agent entry point (`apply`, published as `dsh-admin-bridge/session`)
+// is intentionally gone. It read `ctx.agent`, the accessor DSH 0.1.5-rc.1 no longer
+// installs on an agent context, so it could only throw. Nothing loads this subpath:
+// the host composes per-agent scopes itself and passes the live agent explicitly
+// (`src/index.js` -> `attach()` -> `mountSession(scope.ctx, agent, ...)`).
